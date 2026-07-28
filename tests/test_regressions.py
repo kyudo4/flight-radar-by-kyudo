@@ -348,6 +348,10 @@ class FlightRadarRegressionTests(unittest.TestCase):
         app = (ROOT / "site" / "app.js").read_text()
         self.assertNotIn("Wyniki tylko dla Ciebie", app)
 
+    def test_offer_search_includes_city_names(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn('${offer.route || ""} ${routeName(offer.route)}', app)
+
     def test_google_block_uses_circuit_breaker(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn("except gflights.BlockedError as exc:", source)

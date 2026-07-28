@@ -226,7 +226,7 @@
       const budget = Number(monitor?.filters?.budget_pln);
       const exceptional = (offer.tags || []).some(tag => tag === "Error Fare" || tag === "Mistake Fare");
       if (!monitor || !Number.isFinite(budget) || budget <= 0 || (Number(offer.price_pln) > budget && !exceptional)) return false;
-      const haystack = `${offer.route || ""} ${offer.airline_name || ""} ${offer.source || ""}`.toLowerCase();
+      const haystack = `${offer.route || ""} ${routeName(offer.route)} ${offer.airline_name || ""} ${offer.source || ""}`.toLowerCase();
       const normalizedCabin = String(offer.cabin || "").replace("-", "_");
       return (!query || haystack.includes(query)) && (!cabin || normalizedCabin === cabin) && Number(match.stars || 0) >= minStars;
     }).sort((a, b) => {
