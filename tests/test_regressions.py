@@ -241,11 +241,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('id="appTabs"', html)
         self.assertEqual(html.count('id="radarTab"'), 1)
         self.assertLess(html.index('id="appTabs"'), html.index('id="appView"'))
-        self.assertIn('class="radar-toolbar"', html)
+        self.assertIn('class="radar-sections"', html)
+        self.assertIn('id="alertsSection"', html)
+        self.assertIn('id="monitorsSection"', html)
+        self.assertLess(html.index('id="alertsSection"'), html.index('id="monitorsSection"'))
         self.assertNotIn('Oferty dopasowane do Twoich zasad.', html)
         self.assertIn('show("adminTab", profile.role === "admin")', app_js)
         self.assertIn('profile?.role === "admin"', app_js)
-        self.assertIn('show("adminPanel", adminVisible)', app_js)
+        self.assertIn('show("adminView", adminVisible)', app_js)
 
     def test_telegram_bootstrap_password_fits_bcrypt_limit(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()

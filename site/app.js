@@ -42,11 +42,13 @@
       const claimed = await client.rpc("claim_invite", { invite_token: token });
       if (claimed.data) { history.replaceState({}, "", location.pathname); profile.status = "active"; }
     }
-    if (profile.status !== "active") { show("appTabs", false); show("adminTab", false); show("adminPanel", false); showAppTab("radar"); renderBlocked(); return; }
+    if (profile.status !== "active") { show("appTabs", false); show("adminTab", false); show("adminView", false); showAppTab("radar"); renderBlocked(); return; }
     show("appTabs");
     show("adminTab", profile.role === "admin");
     $("radarTab").onclick = () => showAppTab("radar");
     $("adminTab").onclick = () => showAppTab("admin");
+    $("alertsSectionTab").onclick = () => focusRadarSection("alerts");
+    $("monitorsSectionTab").onclick = () => focusRadarSection("monitors");
     showAppTab("radar");
     await syncTelegramConnection();
     await Promise.all([loadMonitors(), loadOffers()]);
@@ -67,9 +69,16 @@
   function showAppTab(tab) {
     const adminVisible = tab === "admin" && profile?.role === "admin";
     show("radarView", !adminVisible);
-    show("adminPanel", adminVisible);
+    show("adminView", adminVisible);
     $("radarTab").classList.toggle("active", !adminVisible);
     $("adminTab").classList.toggle("active", adminVisible);
+  }
+
+  function focusRadarSection(section) {
+    const sectionId = section === "monitors" ? "monitorsSection" : "alertsSection";
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    $("alertsSectionTab").classList.toggle("active", section !== "monitors");
+    $("monitorsSectionTab").classList.toggle("active", section === "monitors");
   }
 
   async function loadMonitors() {
@@ -82,11 +91,11 @@
   }
 
   function renderMonitor(m) {
-    const f = m.filters || {}, r = m.telegram_rules || {}, status = m.status === "active" ? "Aktywny" : m.status === "expired" ? "Wygasł" : "Wstrzymany";
+    const f = m.filters || {}, r = m.telegram_rules || {};
     const route = `${(f.origins || []).map(airportName).join(", ")} → ${(f.destinations || []).map(airportName).join(", ")}`;
     const nextScan = m.status === "active" ? `Następny skan: ${dateTimeFmt(m.next_scan_at)}` : "Skan wstrzymany";
     const airlineRules = [(f.preferred_airlines || []).length ? `Preferowane: ${(f.preferred_airlines || []).join(", ")}` : "", (f.excluded_airlines || []).length ? `Wykluczone: ${(f.excluded_airlines || []).join(", ")}` : ""].filter(Boolean).join(" · ");
-    return `<article class="monitor-card"><div class="card-top"><div><h3>${esc(m.name)}</h3><div class="card-meta">${esc(route)} · ${esc(CABINS[f.cabin] || f.cabin || "—")} · ${dateFmt(f.from)}–${dateFmt(f.to)}</div></div><span class="pill">${status}</span></div><div class="card-meta">Do ${esc(f.budget_pln ?? "—")} PLN · maks. ${esc(f.max_duration_h ?? "—")}h · Telegram od ${esc(r.min_stars ?? "—")}⭐</div>${airlineRules ? `<div class="card-meta">${esc(airlineRules)}</div>` : ""}<div class="card-meta">Ostatni skan: ${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
+    return `<article class="monitor-card"><div><h3>${esc(m.name)}</h3><div class="card-meta">${esc(route)} · ${esc(CABINS[f.cabin] || f.cabin || "—")} · ${dateFmt(f.from)}–${dateFmt(f.to)}</div></div><div class="card-meta">Do ${esc(f.budget_pln ?? "—")} PLN · maks. ${esc(f.max_duration_h ?? "—")}h · Telegram od ${esc(r.min_stars ?? "—")}⭐</div>${airlineRules ? `<div class="card-meta">${esc(airlineRules)}</div>` : ""}<div class="card-meta">Ostatni skan: ${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
   }
 
   function openMonitorDialog(monitor = null) {
