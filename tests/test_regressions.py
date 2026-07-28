@@ -229,6 +229,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('integrity="sha384-', html)
         self.assertIn("Content-Security-Policy", html)
         self.assertIn('name="referrer" content="no-referrer"', html)
+        self.assertIn('href="https://t.me/flight_radar_kyudo_bot"', html)
 
     def test_admin_is_a_separate_role_gated_app_tab(self):
         html = (ROOT / "site" / "index.html").read_text()
