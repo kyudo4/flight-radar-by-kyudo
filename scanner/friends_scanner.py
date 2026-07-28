@@ -280,6 +280,20 @@ def quality(flight, filters):
     return not any(x in (flight.get("airline_name") or "").lower() for x in excluded)
 
 
+def budget_ok(flight, filters):
+    """Nie zapisuj zwykłych ofert powyżej budżetu monitora.
+
+    Error/Mistake Fares są jedynym świadomym wyjątkiem, bo mogą być okazją
+    mimo przekroczenia ustawionego limitu.
+    """
+    price = flight.get("price_pln")
+    if price is None:
+        return False
+    budget = float(filters.get("budget_pln") or 999999)
+    exceptional = set(flight.get("tags") or []) & {"Error Fare", "Mistake Fare"}
+    return float(price) <= budget or bool(exceptional)
+
+
 def score(flight, filters, feedback=None):
     price = flight.get("price_pln") or 999999
     budget = int(filters.get("budget_pln") or 999999)
@@ -382,7 +396,8 @@ def send_due_alert(match, offer, monitor, connection):
 
 
 def process_candidate(monitor, task, flight):
-    if not quality(flight, monitor.get("filters") or {}):
+    filters = monitor.get("filters") or {}
+    if not quality(flight, filters) or not budget_ok(flight, filters):
         return 0, 0
     previous = fetch_existing(monitor["id"])
     route = "%s → %s" % (task["origin"], task["dest"])
@@ -411,7 +426,7 @@ def process_candidate(monitor, task, flight):
     current_price = flight.get("price_pln")
     previous_min = min(previous_prices) if previous_prices else None
     prices = previous_prices + ([current_price] if current_price is not None else [])
-    stars = score(flight, monitor.get("filters") or {}, matching_feedback)
+    stars = score(flight, filters, matching_feedback)
     rules = monitor.get("telegram_rules") or {}
     is_new_low = bool(current_price is not None and (previous_min is None or current_price < previous_min))
     is_new_airline = bool(airline and airline not in route_airlines)

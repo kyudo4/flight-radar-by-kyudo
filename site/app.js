@@ -70,12 +70,13 @@
     $("monitorsSectionTab").onclick = () => focusRadarSection("monitors");
     showAppTab("radar");
     await syncTelegramConnection();
-    await Promise.all([loadMonitors(), loadOffers(true)]);
+    await loadMonitors();
+    await loadOffers(true);
     if (profile.role === "admin") await loadAdmin();
     $("newMonitorButton").onclick = () => openMonitorDialog();
     $("closeDialog").onclick = $("cancelDialog").onclick = () => $("monitorDialog").close();
     $("monitorForm").onsubmit = saveMonitor;
-    $("refreshButton").onclick = () => Promise.all([loadMonitors(), loadOffers(true)]);
+    $("refreshButton").onclick = async () => { await loadMonitors(); await loadOffers(true); };
     $("loadMoreOffersButton").onclick = () => loadOffers(false);
     ["offerSearch", "offerCabinFilter", "offerStarsFilter", "offerSort"].forEach(id => $(id).oninput = renderOffers);
   }
@@ -169,7 +170,7 @@
     if (!result.error) { $("monitorDialog").close(); $("monitorForm").reset(); editingMonitorId = null; await loadMonitors(); }
   }
   async function updateMonitor(id, patch) { const update = patch.status === "active" ? { ...patch, last_scanned_at: null, next_scan_at: new Date().toISOString() } : patch; try { const { error } = await client.from("monitors").update(update).eq("id", id).eq("user_id", user.id); if (error) throw error; await loadMonitors(); } catch (error) { alert(`Nie udało się zmienić monitora: ${error.message || "błąd połączenia"}`); } }
-  async function deleteMonitor(id) { if (!confirm("Usunąć ten monitoring?")) return; try { const { error } = await client.from("monitors").delete().eq("id", id).eq("user_id", user.id); if (error) throw error; await Promise.all([loadMonitors(), loadOffers(true)]); } catch (error) { alert(`Nie udało się usunąć monitora: ${error.message || "błąd połączenia"}`); } }
+  async function deleteMonitor(id) { if (!confirm("Usunąć ten monitoring?")) return; try { const { error } = await client.from("monitors").delete().eq("id", id).eq("user_id", user.id); if (error) throw error; await loadMonitors(); await loadOffers(true); } catch (error) { alert(`Nie udało się zmienić monitora: ${error.message || "błąd połączenia"}`); } }
 
   async function loadOffers(reset = true) {
     // Do not rely on PostgREST's nested relationship response here. Depending
@@ -185,7 +186,7 @@
     const to = from + OFFER_PAGE_SIZE - 1;
     try {
       const { data: matches, error: matchError } = await client.from("user_matches")
-        .select("id, offer_id, stars, feedback, notified_at, updated_at")
+        .select("id, monitor_id, offer_id, stars, feedback, notified_at, updated_at")
         .eq("visible", true)
         .order("updated_at", { ascending: false })
         .range(from, to);
@@ -221,6 +222,10 @@
     const filtered = offers.filter(match => {
       const offer = offerData(match);
       if (!offer.route || !offer.travel_date || !offer.airline_name || !Number.isFinite(Number(offer.price_pln)) || Number(offer.price_pln) <= 0) return false;
+      const monitor = monitors.find(item => item.id === match.monitor_id);
+      const budget = Number(monitor?.filters?.budget_pln);
+      const exceptional = (offer.tags || []).some(tag => tag === "Error Fare" || tag === "Mistake Fare");
+      if (!monitor || !Number.isFinite(budget) || budget <= 0 || (Number(offer.price_pln) > budget && !exceptional)) return false;
       const haystack = `${offer.route || ""} ${offer.airline_name || ""} ${offer.source || ""}`.toLowerCase();
       const normalizedCabin = String(offer.cabin || "").replace("-", "_");
       return (!query || haystack.includes(query)) && (!cabin || normalizedCabin === cabin) && Number(match.stars || 0) >= minStars;
@@ -231,7 +236,7 @@
       return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
     });
     $("offerCount").textContent = offers.length ? `Pokazano ${filtered.length} z ${offers.length}` : "";
-    $("offerList").innerHTML = filtered.length ? filtered.map(renderOffer).join("") : `<div class="empty">${offers.length ? "Brak ofert pasujących do filtrów." : "Brak dopasowanych ofert. Skaner uzupełni je po uruchomieniu własnego monitoringu."}</div>`;
+    $("offerList").innerHTML = filtered.length ? filtered.map(renderOffer).join("") : `<div class="empty">${offers.length ? "Brak ofert mieszczących się w budżecie i pozostałych filtrach." : "Brak dopasowanych ofert. Skaner uzupełni je po uruchomieniu własnego monitoringu."}</div>`;
     document.querySelectorAll("[data-feedback]").forEach(btn => btn.onclick = () => sendFeedback(btn.dataset.feedback, btn.dataset.match));
   }
   function renderOffer(m) { const o = offerData(m); const mins = Number(o.duration_minutes || 0); const duration = mins ? `${Math.floor(mins / 60)}h ${mins % 60}m` : "—"; const tags = (o.tags || []).map(tag => `<span class="tag">${esc(tag)}</span>`).join(""); const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : ""; return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dateFmt(o.travel_date)}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${duration} · ${o.stops === 0 ? "bez przesiadek" : `${o.stops ?? "?"} przes.`}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`; }

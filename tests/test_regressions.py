@@ -164,6 +164,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertTrue(scanner.quality({"duration_h": 12, "stops": 1}, filters))
         self.assertFalse(scanner.quality({"duration_h": 24.1, "stops": 1}, filters))
 
+    def test_budget_rejects_normal_offer_but_keeps_error_fare_exception(self):
+        filters = {"budget_pln": 4500}
+        self.assertTrue(scanner.budget_ok({"price_pln": 4500}, filters))
+        self.assertFalse(scanner.budget_ok({"price_pln": 4501}, filters))
+        self.assertTrue(scanner.budget_ok({"price_pln": 12000, "tags": ["Error Fare"]}, filters))
+        self.assertTrue(scanner.budget_ok({"price_pln": 12000, "tags": ["Mistake Fare"]}, filters))
+        self.assertFalse(scanner.budget_ok({"price_pln": None}, filters))
+
     def test_prices_accept_european_thousands_formats(self):
         self.assertEqual(gflights._parse_price_pln("5.173 PLN"), 5173)
         self.assertEqual(rss.price("1.000 EUR"), 4350)
@@ -310,12 +318,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_loads_matches_and_offers_separately(self):
         app = (ROOT / "site" / "app.js").read_text()
-        self.assertIn('select("id, offer_id, stars, feedback, notified_at, updated_at")', app)
+        self.assertIn('select("id, monitor_id, offer_id, stars, feedback, notified_at, updated_at")', app)
         self.assertIn('from("flight_offers")', app)
         self.assertIn('.in("id", offerIds)', app)
         self.assertIn('.range(from, to)', app)
         self.assertIn('if (offersLoading) return;', app)
         self.assertIn('flight_offers: byId.get(match.offer_id) || null', app)
+        self.assertIn('monitor?.filters?.budget_pln', app)
         self.assertIn('id="loadMoreOffersButton"', (ROOT / "site" / "index.html").read_text())
 
     def test_google_block_uses_circuit_breaker(self):
