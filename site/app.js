@@ -283,6 +283,34 @@
     document.querySelectorAll("[data-action='delete-user']").forEach(btn => btn.onclick = async () => { if (!confirm("Usunąć konto, jego monitory i alerty? Tego nie można cofnąć.")) return; const result = await client.rpc("admin_delete_profile", { target_id: btn.dataset.user }); if (result.error || result.data !== true) alert(result.error?.message || "Nie usunięto konta."); else await loadAdmin(); });
     $("inviteButton").onclick = createInvite;
   }
-  async function createInvite() { const token = crypto.randomUUID().replaceAll("-", ""); const hash = await hashToken(token); const { error } = await client.rpc("create_invite", { p_token_hash: hash, p_email: null }); if (error) { $("inviteOutput").textContent = error.message; return; } const link = `${location.origin}${location.pathname}?invite=${token}`; $("inviteOutput").innerHTML = `Skopiuj: <a href="${safeHref(link)}">${esc(link)}</a>`; }
+  async function copyInviteLink(link, button) {
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(link); copied = true; }
+    } catch (_error) {
+      // Przeglądarki mogą zablokować Clipboard API, np. w niektórych trybach prywatnych.
+    }
+    if (!copied) {
+      const input = document.createElement("textarea");
+      input.value = link; input.setAttribute("readonly", ""); input.style.position = "fixed"; input.style.opacity = "0";
+      document.body.appendChild(input); input.select();
+      try { copied = document.execCommand("copy"); } catch (_error) { copied = false; }
+      input.remove();
+    }
+    const previous = button.textContent;
+    button.textContent = copied ? "Skopiowano ✓" : "Zaznacz link";
+    button.classList.toggle("copy-failed", !copied);
+    if (!copied) { const input = $("inviteOutput").querySelector("input"); input?.focus(); input?.select(); }
+    window.setTimeout(() => { button.textContent = previous; button.classList.remove("copy-failed"); }, 2200);
+  }
+  async function createInvite() {
+    const token = crypto.randomUUID().replaceAll("-", ""); const hash = await hashToken(token);
+    const { error } = await client.rpc("create_invite", { p_token_hash: hash, p_email: null });
+    if (error) { $("inviteOutput").textContent = error.message; return; }
+    const link = `${location.origin}${location.pathname}?invite=${token}`;
+    $("inviteOutput").innerHTML = `<span class="invite-link-row"><input class="invite-link" aria-label="Link zaproszenia" readonly value="${esc(link)}"><button type="button" class="secondary compact-button" data-copy-invite="true">Kopiuj</button></span>`;
+    const copyButton = $("inviteOutput").querySelector("[data-copy-invite]");
+    copyButton.onclick = () => copyInviteLink(link, copyButton);
+  }
   init().catch(err => { if (configReady) { show("authView"); message(`Nie udało się uruchomić panelu: ${err.message}`); } });
 })();

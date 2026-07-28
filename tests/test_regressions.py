@@ -337,6 +337,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('monitor?.filters?.budget_pln', app)
         self.assertIn('id="loadMoreOffersButton"', (ROOT / "site" / "index.html").read_text())
 
+    def test_invite_link_has_real_copy_control_and_fallback(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn('data-copy-invite', app)
+        self.assertIn('navigator.clipboard.writeText(link)', app)
+        self.assertIn('document.execCommand("copy")', app)
+        self.assertIn('aria-label="Link zaproszenia"', app)
+
     def test_google_block_uses_circuit_breaker(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn("except gflights.BlockedError as exc:", source)
