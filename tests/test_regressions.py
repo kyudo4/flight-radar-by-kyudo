@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scanner"))
 import friends_scanner as scanner
 import gflights
 import rss
+import telegram_io
 
 
 class FlightRadarRegressionTests(unittest.TestCase):
@@ -328,8 +329,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn('cron: "*/5 * * * *"', workflow)
         self.assertIn('group: friends-backend', workflow)
-        self.assertIn('PROCESS_TELEGRAM_ONLY: "true"', workflow)
-        self.assertIn("if PROCESS_TELEGRAM_ONLY:", scanner_source)
+        self.assertIn("python scanner/telegram_feedback.py", workflow)
+        self.assertIn("telegram_io.process_link_updates(api, telegram, TG_TOKEN)", scanner_source)
 
     def test_telegram_auth_is_origin_limited_and_rate_limited(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
@@ -353,8 +354,15 @@ class FlightRadarRegressionTests(unittest.TestCase):
         script = (ROOT / "scanner" / "telegram_smoke.py").read_text()
         self.assertIn("workflow_dispatch", workflow)
         self.assertIn("python scanner/telegram_smoke.py", workflow)
-        self.assertIn('scanner.telegram("sendMessage"', script)
+        self.assertIn('telegram_io.telegram("sendMessage"', script)
         self.assertIn('response.get("ok")', script)
+
+    def test_telegram_jobs_do_not_import_google_flights(self):
+        feedback = (ROOT / "scanner" / "telegram_feedback.py").read_text()
+        smoke = (ROOT / "scanner" / "telegram_smoke.py").read_text()
+        helper = (ROOT / "scanner" / "telegram_io.py").read_text()
+        self.assertNotIn("friends_scanner", feedback + smoke)
+        self.assertNotIn("fast_flights", feedback + smoke + helper)
 
     def test_admin_is_a_separate_role_gated_app_tab(self):
         html = (ROOT / "site" / "index.html").read_text()

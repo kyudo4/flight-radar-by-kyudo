@@ -25,4 +25,4 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           PROCESS_TELEGRAM_ONLY: "true"
-        run: python scanner/friends_scanner.py
+        run: python scanner/telegram_feedback.py

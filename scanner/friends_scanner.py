@@ -14,6 +14,7 @@ from pathlib import Path
 
 import gflights
 import rss
+import telegram_io
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -354,36 +355,7 @@ def price_drop_eligible(old_price, current_price, drop_percent):
 
 
 def process_link_updates():
-    if not TG_TOKEN:
-        return
-    state = api("GET", "telegram_state", params={"id": "eq.1", "select": "update_offset"})
-    offset = int(state[0]["update_offset"]) if state else 0
-    response = telegram("getUpdates", {"offset": offset + 1, "timeout": 0}) or {}
-    max_id = offset
-    for update in response.get("result", []):
-        max_id = max(max_id, update["update_id"])
-        callback = update.get("callback_query") or {}
-        if callback:
-            data = callback.get("data", "")
-            if data.startswith("fb|"):
-                parts = data.split("|", 2)
-                if len(parts) == 3:
-                    match_id, verdict = parts[1], parts[2]
-                    if verdict not in {"buy", "expensive", "skip", "toolong", "badairline"}:
-                        telegram("answerCallbackQuery", {"callback_query_id": callback.get("id"), "text": "Nieprawidłowa odpowiedź"})
-                        continue
-                    chat_id = str((callback.get("message") or {}).get("chat", {}).get("id", ""))
-                    connections = api("GET", "telegram_connections", params={"chat_id": "eq." + chat_id, "select": "user_id"})
-                    if connections:
-                        matches = api("GET", "user_matches", params={"id": "eq." + match_id, "user_id": "eq." + connections[0]["user_id"], "select": "id"})
-                        if matches:
-                            api("POST", "feedback", body={"user_id": connections[0]["user_id"], "match_id": match_id, "verdict": verdict}, params={"on_conflict": "user_id,match_id"})
-                            api("PATCH", "user_matches", body={"feedback": verdict}, params={"id": "eq." + match_id})
-                    telegram("answerCallbackQuery", {"callback_query_id": callback.get("id"), "text": "Zapisano" if connections else "Nie znaleziono powiązanego konta"})
-            continue
-        # Wiadomości tekstowe nie służą do logowania. Powiązanie konta
-        # powstaje po zweryfikowanym logowaniu Telegram OIDC w panelu.
-    api("PATCH", "telegram_state", body={"update_offset": max_id}, params={"id": "eq.1"})
+    telegram_io.process_link_updates(api, telegram, TG_TOKEN)
 
 
 def send_due_alert(match, offer, monitor, connection):
