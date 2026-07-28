@@ -278,6 +278,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertNotIn('Oferty dopasowane do Twoich zasad.', html)
         self.assertIn('name="monitorCabin"', html)
         self.assertIn('wybierz jedną lub więcej', html)
+        self.assertIn('Array.isArray(relation)', app_js)
+        self.assertIn('offer.route || !offer.travel_date', app_js)
         self.assertIn('show("adminTab", profile.role === "admin")', app_js)
         self.assertIn('profile?.role === "admin"', app_js)
         self.assertIn('show("adminView", adminVisible)', app_js)
