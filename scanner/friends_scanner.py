@@ -322,10 +322,13 @@ def process_link_updates():
             if data.startswith("fb|"):
                 parts = data.split("|", 2)
                 if len(parts) == 3:
+                    match_id, verdict = parts[1], parts[2]
+                    if verdict not in {"buy", "expensive", "skip", "toolong", "badairline"}:
+                        telegram("answerCallbackQuery", {"callback_query_id": callback.get("id"), "text": "Nieprawidłowa odpowiedź"})
+                        continue
                     chat_id = str((callback.get("message") or {}).get("chat", {}).get("id", ""))
                     connections = api("GET", "telegram_connections", params={"chat_id": "eq." + chat_id, "select": "user_id"})
                     if connections:
-                        match_id, verdict = parts[1], parts[2]
                         matches = api("GET", "user_matches", params={"id": "eq." + match_id, "user_id": "eq." + connections[0]["user_id"], "select": "id"})
                         if matches:
                             api("POST", "feedback", body={"user_id": connections[0]["user_id"], "match_id": match_id, "verdict": verdict}, params={"on_conflict": "user_id,match_id"})

@@ -182,6 +182,55 @@ class FlightRadarRegressionTests(unittest.TestCase):
             with self.assertRaises(gflights.BlockedError):
                 gflights.fetch_gf("POZ", "BKK", "2026-09-02")
 
+    def test_invalid_telegram_feedback_is_rejected_before_database_write(self):
+        api_calls = []
+
+        def fake_api(method, path, body=None, params=None):
+            api_calls.append((method, path, body, params))
+            if method == "GET" and path == "telegram_state":
+                return [{"update_offset": 0}]
+            return []
+
+        def fake_telegram(method, payload=None):
+            if method == "getUpdates":
+                return {"result": [{
+                    "update_id": 1,
+                    "callback_query": {
+                        "id": "callback-1",
+                        "data": "fb|match-1|invalid",
+                        "message": {"chat": {"id": 123}},
+                    },
+                }]}
+            return {"ok": True}
+
+        with patch.object(scanner, "TG_TOKEN", "test-token"), \
+             patch.object(scanner, "api", side_effect=fake_api), \
+             patch.object(scanner, "telegram", side_effect=fake_telegram):
+            scanner.process_link_updates()
+
+        self.assertFalse(any(method == "POST" and path == "feedback" for method, path, _, _ in api_calls))
+
+    def test_frontend_dependencies_and_browser_policy_are_pinned(self):
+        html = (ROOT / "site" / "index.html").read_text()
+        self.assertIn("@supabase/supabase-js@2.110.9", html)
+        self.assertIn('integrity="sha384-', html)
+        self.assertIn("Content-Security-Policy", html)
+        self.assertIn('name="referrer" content="no-referrer"', html)
+
+    def test_github_actions_are_pinned_to_full_commit_hashes(self):
+        import re
+        workflows = "\n".join(path.read_text() for path in (ROOT / ".github" / "workflows").glob("*.yml"))
+        action_refs = re.findall(r"uses:\s*[^\s@]+@([^\s#]+)", workflows)
+        self.assertTrue(action_refs)
+        self.assertTrue(all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs))
+
+    def test_database_policies_are_limited_to_authenticated_users(self):
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        policies = [line for line in schema.splitlines() if line.startswith("create policy ")]
+        self.assertTrue(policies)
+        self.assertTrue(all(" to authenticated " in line for line in policies))
+        self.assertIn("where x.value !~ '^[A-Z]{3}$'", schema)
+
 
 if __name__ == "__main__":
     unittest.main()
