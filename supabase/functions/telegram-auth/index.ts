@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.9';
-import { createRemoteJWKSet, jwtVerify } from 'npm:jose@5.10.0';
+import { createRemoteJWKSet, jwtVerify } from 'https://esm.sh/jose@5.10.0';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -19,8 +19,9 @@ Deno.serve(async (request) => {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
   try {
-    const { id_token: idToken } = await request.json();
-    if (typeof idToken !== 'string' || idToken.length < 1000 || idToken.length > 20000) {
+    const { id_token: rawIdToken } = await request.json();
+    const idToken = typeof rawIdToken === 'string' ? rawIdToken.trim() : '';
+    if (!idToken || idToken.length > 20000 || idToken.split('.').length !== 3) {
       return json({ error: 'Nieprawidłowy token Telegrama.' }, 400);
     }
 
