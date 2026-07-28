@@ -37,7 +37,7 @@ jobs:
           values = {
               "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
               "supabaseAnonKey": os.environ.get("SUPABASE_ANON_KEY", ""),
-              "telegramAuthProvider": "custom:telegram",
+              "telegramClientId": "8897966422",
           }
           with open("site/config.js", "w") as f:
               f.write("window.ASIA_RADAR_CONFIG = " + json.dumps(values) + ";\n")

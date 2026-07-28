@@ -154,10 +154,30 @@
   function renderOffer(m) { const o = m.flight_offers || {}; const mins = Number(o.duration_minutes || 0); const duration = mins ? `${Math.floor(mins / 60)}h ${mins % 60}m` : "—"; const tags = (o.tags || []).map(tag => `<span class="tag">${esc(tag)}</span>`).join(""); const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : ""; return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dateFmt(o.travel_date)}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${duration} · ${o.stops === 0 ? "bez przesiadek" : `${o.stops ?? "?"} przes.`}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`; }
   async function sendFeedback(verdict, matchId) { const { error } = await client.from("feedback").upsert({ user_id: user.id, match_id: matchId, verdict }, { onConflict: "user_id,match_id" }); if (error) { alert(error.message); return; } const updated = await client.from("user_matches").update({ feedback: verdict }).eq("id", matchId).eq("user_id", user.id); if (updated.error) { alert(updated.error.message); return; } const label = { buy: "Kupiłbym", expensive: "Za drogo", skip: "Pominięto" }[verdict] || verdict; alert(`Zapisano: ${label}`); }
   async function signInWithTelegram() {
-    const provider = cfg.telegramAuthProvider || "custom:telegram";
-    const redirectTo = location.origin + location.pathname + location.search;
-    const { error } = await client.auth.signInWithOAuth({ provider, options: { redirectTo, queryParams: { origin: location.origin } } });
-    if (error) message(`Nie udało się uruchomić logowania Telegram: ${error.message}`);
+    const button = $("telegramLoginButton");
+    if (!window.Telegram?.Login?.auth) { message("Nie udało się załadować logowania Telegram. Odśwież stronę."); return; }
+    const clientId = Number(cfg.telegramClientId || "8897966422");
+    if (!Number.isInteger(clientId) || clientId <= 0) { message("Brak prawidłowej konfiguracji logowania Telegram."); return; }
+    button.disabled = true;
+    message("Potwierdź logowanie w oknie Telegrama…");
+    window.Telegram.Login.auth({ client_id: clientId, scope: ["profile", "write"], lang: "pl" }, async result => {
+      try {
+        if (!result?.id_token) throw new Error(result?.error || "Logowanie zostało anulowane.");
+        const response = await fetch(`${cfg.supabaseUrl}/functions/v1/telegram-auth`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", apikey: cfg.supabaseAnonKey },
+          body: JSON.stringify({ id_token: result.id_token })
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || "Nie udało się zweryfikować logowania Telegram.");
+        const { error } = await client.auth.signInWithPassword({ email: body.email, password: body.password });
+        if (error) throw error;
+      } catch (error) {
+        message(`Nie udało się zalogować przez Telegram: ${error.message || "błąd logowania"}`);
+      } finally {
+        button.disabled = false;
+      }
+    });
   }
   async function syncTelegramConnection() {
     const metadata = user.user_metadata || {};

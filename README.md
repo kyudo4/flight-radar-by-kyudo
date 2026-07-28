@@ -14,19 +14,20 @@ jej stanu, tokenów Telegrama ani historii alertów.
 - `.github/workflows/scan.yml` — wspólny skan co 3 godziny;
 - Google Flights — wspólny kolektor z kontrolowanym limitem zapytań i retry dla przejściowych błędów;
 - RSS źródeł promocyjnych — Secret Flying, Fly4Free, LoyaltyLobby, OMAAT, Travel Dealz, View From The Wing, FlyerTalk i Reddit;
-- Telegram OIDC — jedyne logowanie i jednocześnie kanał alertów.
+- Telegram Login — jedyne logowanie i jednocześnie kanał alertów. Panel korzysta
+  z podpisanego `id_token`, a funkcja `supabase/functions/telegram-auth` weryfikuje
+  go po stronie serwera i dopiero wtedy tworzy sesję Supabase.
 
 ## Uruchomienie
 
 1. Utwórz projekt Supabase i wykonaj `supabase/schema.sql`. Jeśli baza już działała
    na wcześniejszej wersji, wykonaj dodatkowo `supabase/migrations/20260728_hardening.sql`.
-2. W Supabase Auth dodaj własnego providera OIDC `custom:telegram`:
-   issuer `https://oauth.telegram.org`, zakresy `openid profile telegram:bot_access`,
-   `email_optional = true`. Client ID i secret pobierz z BotFather.
-   Client ID/secret muszą pochodzić z tego samego bota, którego token ustawisz
-   później jako `TG_BOT_TOKEN`.
-3. W BotFather dodaj jako Allowed URLs domenę panelu oraz callback URL pokazany
-   przez Supabase dla providera `custom:telegram`.
+2. W BotFather > Bot Settings > Web Login dodaj domenę panelu jako Allowed Origin
+   i pozostaw Client ID/Secret dla tego samego bota.
+3. W Supabase Edge Functions utwórz funkcję `telegram-auth` z pliku
+   `supabase/functions/telegram-auth/index.ts`, wyłącz jej legacy JWT verification
+   (funkcja sama sprawdza podpisany token Telegrama), a następnie dodaj sekrety
+   `TELEGRAM_CLIENT_ID` i `TELEGRAM_CLIENT_SECRET`. Sekret klienta nie trafia do strony.
 4. Ustaw adres projektu i anon key w `site/config.js` na podstawie `site/config.example.js`.
 5. Ustaw sekrety GitHub Actions: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
    `SUPABASE_ANON_KEY` i `TG_BOT_TOKEN`.
