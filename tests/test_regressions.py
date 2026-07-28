@@ -241,6 +241,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('id="appTabs"', html)
         self.assertEqual(html.count('id="radarTab"'), 1)
         self.assertLess(html.index('id="appTabs"'), html.index('id="appView"'))
+        self.assertIn('class="radar-toolbar"', html)
+        self.assertNotIn('Oferty dopasowane do Twoich zasad.', html)
         self.assertIn('show("adminTab", profile.role === "admin")', app_js)
         self.assertIn('profile?.role === "admin"', app_js)
         self.assertIn('show("adminPanel", adminVisible)', app_js)
