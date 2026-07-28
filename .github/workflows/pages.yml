@@ -1,4 +1,4 @@
-name: Publish Friends dashboard
+name: Publish Flight Radar by Kyudo dashboard
 
 on:
   push:

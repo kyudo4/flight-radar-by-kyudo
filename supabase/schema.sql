@@ -1,4 +1,4 @@
--- Asia Flight Radar — Friends
+-- Flight Radar by Kyudo
 -- Execute once in Supabase SQL Editor.
 
 create extension if not exists pgcrypto;

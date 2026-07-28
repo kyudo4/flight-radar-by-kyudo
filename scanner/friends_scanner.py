@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wspólny skaner Friends: stan i dane są wyłącznie w Supabase."""
+"""Wspólny skaner Flight Radar by Kyudo: stan i dane są wyłącznie w Supabase."""
 import hashlib
 import json
 import os
@@ -167,11 +167,11 @@ def process_link_updates():
         chat_id = str(chat.get("id"))
         existing_chat = api("GET", "telegram_connections", params={"chat_id": "eq." + chat_id, "select": "user_id"})
         if existing_chat and existing_chat[0]["user_id"] != tokens[0]["user_id"]:
-            telegram("sendMessage", {"chat_id": chat.get("id"), "text": "⚠️ Ten Telegram jest już połączony z innym kontem Friends."})
+            telegram("sendMessage", {"chat_id": chat.get("id"), "text": "⚠️ Ten Telegram jest już połączony z innym kontem Flight Radar by Kyudo."})
             continue
         api("POST", "telegram_connections", body={"user_id": tokens[0]["user_id"], "chat_id": chat_id, "username": chat.get("username", "")}, params={"on_conflict": "user_id"})
         api("PATCH", "telegram_link_tokens", body={"used_at": datetime.utcnow().isoformat() + "Z"}, params={"token_hash": "eq." + token_hash(raw)})
-        telegram("sendMessage", {"chat_id": chat.get("id"), "text": "✅ Asia Flight Radar Friends połączony. Alerty będą trafiać tutaj."})
+        telegram("sendMessage", {"chat_id": chat.get("id"), "text": "✅ Flight Radar by Kyudo połączony. Alerty będą trafiać tutaj."})
     api("PATCH", "telegram_state", body={"update_offset": max_id}, params={"id": "eq.1"})
 
 

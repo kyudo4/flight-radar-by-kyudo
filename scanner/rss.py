@@ -38,7 +38,7 @@ def fresh(value):
 
 def items(feed):
     try:
-        req = urllib.request.Request(feed["url"], headers={"User-Agent": "AsiaFlightRadar/2.0"})
+        req = urllib.request.Request(feed["url"], headers={"User-Agent": "FlightRadarByKyudo/2.0"})
         with urllib.request.urlopen(req, timeout=20) as response:
             root = ET.fromstring(response.read())
         result = []

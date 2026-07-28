@@ -1,4 +1,4 @@
-# Asia Flight Radar — Friends
+# Flight Radar by Kyudo
 
 Zamknięta wersja monitora lotów dla maksymalnie 10 zaproszonych osób.
 
@@ -23,8 +23,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
    `SUPABASE_ANON_KEY`, `TG_BOT_TOKEN`, `TG_BOT_USERNAME`.
 4. Utwórz pierwsze konto w Supabase Auth i wykonaj `supabase/bootstrap-admin.sql`
    po wpisaniu swojego e-maila.
-5. Włącz GitHub Pages przez workflow `Publish Friends dashboard`.
-6. Włącz workflow `Friends flight scan`.
+5. Włącz GitHub Pages przez workflow `Publish Flight Radar by Kyudo dashboard`.
+6. Włącz workflow `Flight Radar by Kyudo scan`.
 
 Do działania skanera potrzebny jest Python 3.11 i zależność `fast-flights`.
 Wyniki i ustawienia nie są zapisywane w repozytorium.

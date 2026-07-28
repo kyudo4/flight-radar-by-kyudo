@@ -1,4 +1,4 @@
-name: Friends flight scan
+name: Flight Radar by Kyudo scan
 
 on:
   schedule:
