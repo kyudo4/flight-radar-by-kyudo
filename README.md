@@ -1,6 +1,6 @@
 # Flight Radar by Kyudo
 
-Zamknięta wersja monitora lotów dla maksymalnie 10 zaproszonych osób.
+Zamknięta wersja pustego monitora lotów dla maksymalnie 10 zaproszonych osób.
 
 Projekt jest niezależny od prywatnej aplikacji w `Apki/flight-radar`. Nie kopiuje
 jej stanu, tokenów Telegrama ani historii alertów.
@@ -9,15 +9,17 @@ jej stanu, tokenów Telegrama ani historii alertów.
 
 - `site/` — statyczny panel GitHub Pages (HTML/CSS/JS);
 - `supabase/schema.sql` — prywatna baza użytkowników, monitorów, ofert i alertów;
+- `monitor_scan_items` — trwała kolejka każdej konkretnej trasy, daty i klasy;
 - `scanner/` — skaner Python uruchamiany przez GitHub Actions;
 - `.github/workflows/scan.yml` — wspólny skan co 3 godziny;
-- Google Flights — wspólny kolektor, maksymalnie 30 zapytań standardowych + 2 First na przebieg;
+- Google Flights — wspólny kolektor z kontrolowanym limitem zapytań i retry dla przejściowych błędów;
 - RSS źródeł promocyjnych — Secret Flying, Fly4Free, LoyaltyLobby, OMAAT, Travel Dealz, View From The Wing, FlyerTalk i Reddit;
 - Telegram OIDC — jedyne logowanie i jednocześnie kanał alertów.
 
 ## Uruchomienie
 
-1. Utwórz projekt Supabase i wykonaj `supabase/schema.sql`.
+1. Utwórz projekt Supabase i wykonaj `supabase/schema.sql`. Jeśli baza już działała
+   na wcześniejszej wersji, wykonaj dodatkowo `supabase/migrations/20260728_hardening.sql`.
 2. W Supabase Auth dodaj własnego providera OIDC `custom:telegram`:
    issuer `https://oauth.telegram.org`, zakresy `openid profile telegram:bot_access`,
    `email_optional = true`. Client ID i secret pobierz z BotFather.
@@ -45,7 +47,15 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   dopasowanie;
 - ponowny alert tej samej oferty wymaga spadku ceny o próg zapisany przez
   użytkownika (domyślnie 10%);
+- preferowane linie są ustawiane osobno przez użytkownika i wpływają na ocenę,
+  a wykluczone linie są odrzucane przed zapisem;
+- panel ma dodatkowe lokalne filtrowanie wyników po trasie/linii, klasie,
+  minimalnej ocenie oraz sortowanie po cenie, ocenie i świeżości;
+- zapisanie lub wznowienie zmienionego monitora ustawia jego kolejkę do sprawdzenia
+  w najbliższym przebiegu, zamiast czekać na poprzedni termin;
 - każda osoba ma własne monitory, dopasowania, feedback i połączenie Telegrama.
+- nowa osoba zaczyna z pustą kartą; skaner nie wykonuje żadnych wyszukiwań, dopóki
+  użytkownik nie zapisze własnych filtrów.
 
 ## Zasady bezpieczeństwa
 
@@ -58,5 +68,21 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 ## Limit skanera
 
 Scheduler deduplikuje identyczne zapytania użytkowników. W jednym przebiegu
-wybiera maksymalnie 30 zapytań standardowych i 2 First. Kolejka zaczyna od
-najdawniej sprawdzanych monitorów, żeby limit był dzielony fair-use.
+wybiera domyślnie maksymalnie 60 zapytań standardowych i 4 First. Pozycje kolejki
+są wybierane rotacyjnie między monitorami, żeby jeden użytkownik nie zablokował
+pozostałych. W puli standardowej Business, Economy i Premium Economy również
+rotują między sobą; nie ma sztywnego limitu Economy, więc niewykorzystane miejsca
+przechodzą do klas, które mają zadania. Identyczne zadania są wykonywane tylko raz.
+Kolejka jest stronicowana,
+więc duża liczba monitorów nie ucina jej po pierwszych 20 000 rekordów.
+
+Limity można zmienić zmiennymi środowiskowymi `MAX_STANDARD_QUERIES`,
+`MAX_FIRST_QUERIES` i `GOOGLE_REQUEST_DELAY_SECONDS`. Domyślne 64 zapytania na
+przebieg co 3 godziny oznaczają około 2,5 dnia na pełny obieg monitora
+10 × 9 × 14 bez First; przy wielu różnych monitorach czas rośnie proporcjonalnie.
+Nie należy usuwać opóźnienia ani zwiększać limitów bez obserwacji blokad Google.
+
+## Testy lokalne
+
+Uruchom `python -m unittest discover -s tests -v`. Ten sam zestaw jest
+wykonywany w GitHub Actions przed każdym skanem.

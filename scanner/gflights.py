@@ -8,6 +8,7 @@ po stronie serwera) i parsuje HTML parserem fast-flights.
 """
 
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -75,8 +76,20 @@ def _parse_price_pln(s):
     m = re.search(r"([\d][\d\s,.]*)", (s or "").replace("PLN", ""))
     if not m:
         return None
+    raw = re.sub(r"\s+", "", m.group(1))
     try:
-        return int(round(float(m.group(1).replace(",", "").replace(" ", ""))))
+        if "," in raw and "." in raw:
+            decimal = "." if raw.rfind(".") > raw.rfind(",") else ","
+            thousands = "," if decimal == "." else "."
+            raw = raw.replace(thousands, "").replace(decimal, ".")
+        elif "," in raw:
+            parts = raw.split(",")
+            raw = "".join(parts) if len(parts[-1]) == 3 else ".".join(parts)
+        elif "." in raw:
+            parts = raw.split(".")
+            if len(parts[-1]) == 3 and all(part.isdigit() for part in parts):
+                raw = "".join(parts)
+        return int(round(float(raw)))
     except ValueError:
         return None
 
@@ -89,9 +102,16 @@ def fetch_gf(origin, dest, date, seat="business", timeout=35):
     req.add_header("Accept", "text/html,application/xhtml+xml")
     req.add_header("Accept-Language", "en-US,en;q=0.9")
     req.add_header("Cookie", "CONSENT=YES+cb")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read().decode("utf-8", "ignore")
-        status = resp.status
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", "ignore")
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        # 403/429/503 są traktowane jako blokada lub throttling Google.
+        # Nie ponawiamy ich w tym samym przebiegu, żeby nie pogłębiać blokady.
+        if exc.code in {403, 429, 503}:
+            raise BlockedError("Google HTTP %s" % exc.code) from exc
+        raise
     if status != 200 or "Before you continue" in body[:200000]:
         raise BlockedError("consent wall / status %s" % status)
     try:
@@ -103,13 +123,21 @@ def fetch_gf(origin, dest, date, seat="business", timeout=35):
         price = _parse_price_pln(fl.price)
         if not price:
             continue
+        stops = fl.stops if isinstance(fl.stops, int) else None
+        if stops is None:
+            stop_match = re.search(r"(\d+)\s*stop", str(fl.stops or ""), re.I)
+            stops = int(stop_match.group(1)) if stop_match else (0 if re.search(r"non[- ]?stop|direct", str(fl.stops or ""), re.I) else None)
+        duration_h = _parse_duration_h(fl.duration)
+        if duration_h is None or stops is None:
+            continue
         flights.append({
             "airline_name": fl.name,
             "airline": airline_code(fl.name),
             "price_pln": price,
-            "duration_h": _parse_duration_h(fl.duration),
-            "stops": fl.stops if isinstance(fl.stops, int) else None,
+            "duration_h": duration_h,
+            "stops": stops,
             "departure": fl.departure,
+            "aircraft": getattr(fl, "aircraft", "") or getattr(fl, "aircraft_type", ""),
             "link": url,
         })
     return result.current_price, flights

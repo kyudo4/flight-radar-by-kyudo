@@ -4,7 +4,7 @@ import json
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
@@ -28,12 +28,15 @@ def clean(value):
 
 def fresh(value):
     if not value:
-        return True
+        return False
     try:
         parsed = parsedate_to_datetime(value)
-        return datetime.now(parsed.tzinfo) - parsed <= timedelta(days=21)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - parsed
+        return timedelta(days=0) <= age <= timedelta(days=21)
     except (TypeError, ValueError):
-        return True
+        return False
 
 
 def items(feed):
@@ -44,13 +47,13 @@ def items(feed):
         result = []
         for node in root.iter("item"):
             if fresh(node.findtext("pubDate")):
-                result.append({"title": clean(node.findtext("title")), "description": clean(node.findtext("description")), "link": (node.findtext("link") or "").strip(), "source": feed["name"]})
+                result.append({"title": clean(node.findtext("title")), "description": clean(node.findtext("description")), "link": safe_link(node.findtext("link")), "source": feed["name"]})
         atom = "{http://www.w3.org/2005/Atom}"
         for node in root.iter(atom + "entry"):
             if not fresh(node.findtext(atom + "updated") or node.findtext(atom + "published")):
                 continue
             link = node.find(atom + "link")
-            result.append({"title": clean(node.findtext(atom + "title")), "description": clean(node.findtext(atom + "summary") or node.findtext(atom + "content")), "link": link.get("href", "") if link is not None else "", "source": feed["name"]})
+            result.append({"title": clean(node.findtext(atom + "title")), "description": clean(node.findtext(atom + "summary") or node.findtext(atom + "content")), "link": safe_link(link.get("href", "") if link is not None else ""), "source": feed["name"]})
         return result[:60]
     except Exception:
         return []
@@ -96,12 +99,43 @@ def _number(raw):
     elif "," in raw:
         parts = raw.split(",")
         raw = "".join(parts) if len(parts[-1]) == 3 else ".".join(parts)
-    elif raw.count(".") > 1:
-        raw = raw.replace(".", "")
+    elif "." in raw:
+        parts = raw.split(".")
+        if len(parts[-1]) == 3 and all(part.isdigit() for part in parts):
+            raw = "".join(parts)
     return float(raw)
 
 
+def safe_link(value):
+    value = (value or "").strip()
+    return value if re.match(r"^https?://", value, re.I) else ""
+
+
+def duration_hours(text):
+    text = (text or "").lower()
+    hours = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:h|hr|hrs|hour|hours|godz)", text)
+    minutes = re.search(r"(\d+)\s*(?:m|min|mins|minute|minutes|minut)", text)
+    if not hours and not minutes:
+        return None
+    total = float((hours.group(1) if hours else "0").replace(",", ".")) * 60
+    total += int(minutes.group(1)) if minutes else 0
+    return total / 60
+
+
+def stops_count(text):
+    text = (text or "").lower()
+    if re.search(r"non[- ]?stop|direct|bez przesiad", text):
+        return 0
+    match = re.search(r"(\d+)\s*(?:stop|stops|przesiad)", text)
+    return int(match.group(1)) if match else None
+
+
 def price(text):
+    values = price_candidates(text)
+    return min(value for value, _start, _end in values) if values else None
+
+
+def price_candidates(text):
     currency = r"PLN|zł|EUR|€|USD|\$|GBP|£"
     pattern = rf"(?:(?P<before>{currency})\s*(?P<left>\d[\d\s.,]*)|(?P<right>\d[\d\s.,]*)\s*(?P<after>{currency}))"
     values = []
@@ -112,10 +146,28 @@ def price(text):
             amount = _number(raw)
             value = amount * RATES_TO_PLN.get(unit, 1.0)
             if 300 <= value <= 40000:
-                values.append(round(value))
+                values.append((round(value), match.start(), match.end()))
         except ValueError:
             pass
-    return min(values) if values else None
+    return values
+
+
+def premium_price(text):
+    """Wybiera cenę blisko wzmianki o Business/First, nie np. Economy/hotelu."""
+    premium_terms = list(re.finditer(r"\b(?:business(?:\s+class)?|first(?:\s+class)?|lie[- ]flat)\b", text, re.I))
+    candidates = price_candidates(text)
+    if not premium_terms or not candidates:
+        return None
+    nearest = []
+    for value, start, end in candidates:
+        distance = min(
+            0 if start <= term.end() and end >= term.start() else
+            (term.start() - end if end < term.start() else start - term.end())
+            for term in premium_terms
+        )
+        nearest.append((distance, value))
+    distance, value = min(nearest)
+    return value if distance <= 120 else None
 
 
 def candidates(monitors):
@@ -133,14 +185,18 @@ def candidates(monitors):
                 continue
             cabin = "FIRST" if re.search(r"first class|first fare", text) else "BUSINESS"
             carrier = next((code for name, code in AIRLINES.items() if name in text), "")
-            amount = price(text)
+            amount = premium_price(text)
             if not amount:
                 continue
             tags = []
-            if re.search(r"error fare|mistake fare|error price", text): tags.append("Error Fare")
+            if re.search(r"error fare|error price", text): tags.append("Error Fare")
+            if re.search(r"mistake fare|mistake price", text): tags.append("Mistake Fare")
             if re.search(r"flash sale|limited time|ends soon", text): tags.append("Flash Sale")
             if re.search(r"promo code|coupon|discount code", text): tags.append("Promo Code")
             if re.search(r"companion", text): tags.append("Companion Fare")
+            if re.search(r"upgrade offer|upgrade available|upgrade deal", text): tags.append("Upgrade Offer")
+            duration = duration_hours(text)
+            stops = stops_count(text)
             for monitor in monitors:
                 filters = monitor.get("filters") or {}
                 if cabin != filters.get("cabin", cabin):
@@ -152,5 +208,5 @@ def candidates(monitors):
                     continue
                 for origin in sorted(set(origins) & set(filters.get("origins", []))):
                     for dest in sorted(set(destinations) & set(filters.get("destinations", []))):
-                        out.append((monitor, {"airline": carrier, "airline_name": next((name.title() for name, code in AIRLINES.items() if code == carrier), ""), "price_pln": amount, "duration_h": None, "stops": None, "departure": "", "link": item["link"], "source": item["source"], "tags": tags, "title": item["title"]}, origin, dest, dates[0]))
+                        out.append((monitor, {"airline": carrier, "airline_name": next((name.title() for name, code in AIRLINES.items() if code == carrier), ""), "price_pln": amount, "duration_h": duration, "stops": stops, "departure": "", "link": item["link"], "source": item["source"], "tags": tags, "title": item["title"]}, origin, dest, dates[0]))
     return out
