@@ -256,8 +256,8 @@ begin
   budget := coalesce((new.filters ->> 'budget_pln')::numeric, 0);
   duration := coalesce((new.filters ->> 'max_duration_h')::numeric, 24);
   stops := coalesce((new.filters ->> 'max_stops')::integer, 2);
-  if origin_count < 1 or origin_count > 20 or destination_count < 1 or destination_count > 20 then
-    raise exception 'Monitor musi zawierać od 1 do 20 lotnisk wylotu i celów';
+  if origin_count < 1 or origin_count > 5 or destination_count < 1 or destination_count > 5 then
+    raise exception 'Monitor może zawierać maksymalnie 5 lotnisk wylotu i 5 celów';
   end if;
   if exists (
     select 1 from jsonb_array_elements_text(new.filters -> 'origins') as x(value)

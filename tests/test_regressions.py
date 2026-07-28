@@ -29,6 +29,19 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(len(items), 56)
         self.assertEqual(len({(x["origin"], x["destination"], x["travel_date"]) for x in items}), 56)
 
+    def test_monitor_rejects_more_than_five_airports_per_side(self):
+        monitor = {
+            "id": "monitor-too-wide",
+            "filters": {
+                "origins": ["GDN", "WAW", "POZ", "VIE", "BUD", "MXP"],
+                "destinations": ["BKK"],
+                "from": "2026-09-01",
+                "to": "2026-09-14",
+                "cabin": "BUSINESS",
+            },
+        }
+        self.assertEqual(scanner.monitor_combinations(monitor), [])
+
     def test_scan_selection_rotates_between_monitors(self):
         due = []
         for monitor_id in ("a", "b", "c"):

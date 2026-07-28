@@ -19,6 +19,7 @@ SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 MAX_STANDARD = max(1, min(100, int(os.environ.get("MAX_STANDARD_QUERIES", "60"))))
 MAX_FIRST = max(1, min(10, int(os.environ.get("MAX_FIRST_QUERIES", "4"))))
+MAX_AIRPORTS_PER_SIDE = 5
 SCAN_INTERVAL_HOURS = 3
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))
 FETCH_RETRIES = 2
@@ -78,7 +79,9 @@ def monitor_combinations(monitor):
     destinations = sorted({x.upper() for x in f.get("destinations", []) if x})
     dates = date_range(f)
     cabin = (f.get("cabin") or "BUSINESS").lower().replace("_", "-")
-    if not origins or not destinations or not dates:
+    if (not origins or not destinations or not dates
+            or len(origins) > MAX_AIRPORTS_PER_SIDE
+            or len(destinations) > MAX_AIRPORTS_PER_SIDE):
         return []
     return [{"monitor_id": monitor["id"], "origin": origin, "destination": destination,
              "travel_date": day.isoformat(), "cabin": cabin}

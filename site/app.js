@@ -102,7 +102,7 @@
     const budget = Number(budgetRaw), maxDuration = Number(durationRaw), maxStops = Number(stopsRaw), telegramStars = Number(starsRaw), telegramDrop = Number(dropRaw);
     const validIata = values => values.length > 0 && values.every(value => /^[A-Z]{3}$/.test(value));
     if (!name) { $("formMessage").textContent = "Podaj nazwę monitoringu."; return; }
-    if (!validIata(origins) || !validIata(destinations) || origins.length > 20 || destinations.length > 20) { $("formMessage").textContent = "Wpisz od 1 do 20 lotnisk na stronę jako trzyznakowe kody IATA."; return; }
+    if (!validIata(origins) || !validIata(destinations) || origins.length > 5 || destinations.length > 5) { $("formMessage").textContent = "Wpisz od 1 do 5 lotnisk wylotu i maksymalnie 5 celów jako trzyznakowe kody IATA."; return; }
     const days = from && to ? Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1 : 0;
     if (!from || !to || from > to || days > 32) { $("formMessage").textContent = "Zakres dat jest nieprawidłowy (maksymalnie 32 dni)."; return; }
     if (!cabin || !budgetRaw || !durationRaw || !stopsRaw || !starsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || !Number.isFinite(maxDuration) || maxDuration <= 0 || maxDuration > 24 || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isInteger(telegramStars) || telegramStars < 3 || telegramStars > 5 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Uzupełnij wszystkie wymagane kryteria. Czas może wynosić maksymalnie 24 h, a przesiadki 0–9."; return; }

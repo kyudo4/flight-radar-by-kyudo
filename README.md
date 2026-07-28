@@ -57,6 +57,8 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 - każda osoba ma własne monitory, dopasowania, feedback i połączenie Telegrama.
 - nowa osoba zaczyna z pustą kartą; skaner nie wykonuje żadnych wyszukiwań, dopóki
   użytkownik nie zapisze własnych filtrów.
+- pojedynczy monitoring przyjmuje maksymalnie 5 lotnisk wylotu i 5 celów; limit jest
+  sprawdzany w panelu, bazie oraz skanerze.
 
 ## Zasady bezpieczeństwa
 
