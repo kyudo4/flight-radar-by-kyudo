@@ -10,6 +10,7 @@ create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
   display_name text not null default '',
+  telegram_user_id text unique,
   role public.profile_role not null default 'user',
   status public.profile_status not null default 'pending',
   quiet_from time,
@@ -93,14 +94,6 @@ create table public.telegram_connections (
   last_update_id bigint not null default 0
 );
 
-create table public.telegram_link_tokens (
-  token_hash text primary key,
-  user_id uuid not null references public.profiles(id) on delete cascade,
-  expires_at timestamptz not null default (now() + interval '30 minutes'),
-  used_at timestamptz,
-  created_at timestamptz not null default now()
-);
-
 create table public.telegram_state (
   id integer primary key default 1 check (id = 1),
   update_offset bigint not null default 0
@@ -140,10 +133,17 @@ $$;
 
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  telegram_id text;
 begin
+  telegram_id := coalesce(new.raw_user_meta_data->>'id', new.raw_user_meta_data->>'sub');
   insert into public.profiles(id, email, display_name)
-  values (new.id, coalesce(new.email, ''), coalesce(new.raw_user_meta_data->>'full_name', ''))
+  values (new.id, coalesce(new.email, ''), coalesce(new.raw_user_meta_data->>'name', new.raw_user_meta_data->>'full_name', ''))
   on conflict (id) do nothing;
+  update public.profiles
+  set telegram_user_id = coalesce(telegram_user_id, telegram_id),
+      display_name = case when display_name = '' then coalesce(new.raw_user_meta_data->>'name', new.raw_user_meta_data->>'full_name', '') else display_name end
+  where id = new.id;
   return new;
 end;
 $$;
@@ -191,13 +191,32 @@ begin
 end;
 $$;
 
+create or replace function public.sync_telegram_connection(telegram_chat_id text, telegram_username text default '')
+returns boolean language plpgsql security definer set search_path = public as $$
+declare
+  expected_id text;
+begin
+  if auth.uid() is null then return false; end if;
+  select telegram_user_id into expected_id from public.profiles where id = auth.uid();
+  expected_id := coalesce(expected_id, auth.jwt() -> 'user_metadata' ->> 'id', auth.jwt() -> 'user_metadata' ->> 'sub');
+  if expected_id is null or expected_id <> telegram_chat_id then return false; end if;
+  insert into public.telegram_connections(user_id, chat_id, username)
+  values (auth.uid(), telegram_chat_id, nullif(telegram_username, ''))
+  on conflict (user_id) do update set chat_id = excluded.chat_id, username = excluded.username;
+  update public.profiles set telegram_user_id = telegram_chat_id where id = auth.uid();
+  return true;
+exception when unique_violation then
+  return false;
+end;
+$$;
+grant execute on function public.sync_telegram_connection(text, text) to authenticated;
+
 alter table public.profiles enable row level security;
 alter table public.invites enable row level security;
 alter table public.monitors enable row level security;
 alter table public.flight_offers enable row level security;
 alter table public.user_matches enable row level security;
 alter table public.telegram_connections enable row level security;
-alter table public.telegram_link_tokens enable row level security;
 alter table public.telegram_state enable row level security;
 alter table public.scan_runs enable row level security;
 alter table public.feedback enable row level security;
@@ -215,7 +234,6 @@ create policy matches_owner_read on public.user_matches for select using (user_i
 create policy matches_owner_update on public.user_matches for update using (user_id = auth.uid() or public.is_admin()) with check (user_id = auth.uid() or public.is_admin());
 create policy connections_self_read on public.telegram_connections for select using (user_id = auth.uid() or public.is_admin());
 create policy connections_self_delete on public.telegram_connections for delete using (user_id = auth.uid() or public.is_admin());
-create policy link_tokens_self_all on public.telegram_link_tokens for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy telegram_state_admin_read on public.telegram_state for select using (public.is_admin());
 create policy scan_runs_admin_read on public.scan_runs for select using (public.is_admin());
 create policy feedback_owner_all on public.feedback for all using (user_id = auth.uid()) with check (user_id = auth.uid());

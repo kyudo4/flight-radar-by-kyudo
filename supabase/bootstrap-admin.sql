@@ -1,5 +1,5 @@
--- Uruchom po utworzeniu pierwszego konta w Supabase Auth.
--- Zmień adres na swój e-mail.
+-- Uruchom po pierwszym logowaniu przez Telegram.
+-- Wpisz swój identyfikator Telegrama z tabeli public.profiles.
 update public.profiles
 set role = 'admin', status = 'active', display_name = 'Administrator'
-where lower(email) = lower('TU_WPISZ_SWOJ_EMAIL');
+where telegram_user_id = 'TU_WPISZ_SWÓJ_TELEGRAM_ID';

@@ -23,13 +23,13 @@
     <section id="authView" class="panel auth hidden">
       <div class="eyebrow">Zamknięta beta · maks. 10 osób</div>
       <h1>Twój osobisty radar okazji</h1>
-      <p class="lead">Zaloguj się, aby zobaczyć własne monitory i prywatne alerty Telegram.</p>
-      <form id="loginForm" class="login-form"><label>E-mail<input id="loginEmail" type="email" required placeholder="ty@example.com"></label><button class="primary">Wyślij link logowania</button></form>
+      <p class="lead">Zaloguj się przez Telegram, aby zobaczyć własne monitory i prywatne alerty.</p>
+      <button id="telegramLoginButton" class="primary">Zaloguj przez Telegram</button>
       <p id="authMessage" class="message"></p>
     </section>
 
     <section id="appView" class="hidden">
-      <div class="hero-row"><div><div class="eyebrow">Twój radar</div><h1>Oferty dopasowane do Twoich zasad.</h1><p class="lead">Wyniki są prywatne. Telegram ma osobne, ostrzejsze reguły niż panel.</p></div><div class="hero-actions"><button id="connectTelegramButton" class="secondary">Połącz Telegram</button><button id="newMonitorButton" class="primary">+ Nowy monitoring</button></div></div>
+      <div class="hero-row"><div><div class="eyebrow">Twój radar</div><h1>Oferty dopasowane do Twoich zasad.</h1><p class="lead">Wyniki są prywatne. Zalogowane konto Telegram jest też kanałem alertów.</p></div><div class="hero-actions"><button id="newMonitorButton" class="primary">+ Nowy monitoring</button></div></div>
       <div id="statusStrip" class="status-strip"></div>
       <div class="content-grid"><section><div class="section-heading"><h2>Moje monitory</h2><span id="monitorCount" class="pill"></span></div><div id="monitorList" class="monitor-list"></div></section><aside><div class="section-heading"><h2>Moje alerty</h2><button id="refreshButton" class="link-button">Odśwież</button></div><div id="offerList" class="offer-list"></div></aside></div>
       <section id="adminPanel" class="panel admin hidden"><div class="section-heading"><div><div class="eyebrow">Tylko dla Ciebie</div><h2>Panel administratora</h2></div><span id="seatCount" class="pill"></span></div><div class="admin-actions"><button id="inviteButton" class="secondary">Utwórz zaproszenie</button><span id="inviteOutput" class="message"></span></div><p class="muted">„Zawieś” blokuje dostęp bez kasowania danych. „Usuń” kasuje konto, monitory i alerty oraz zwalnia miejsce.</p><div id="userList" class="user-list"></div></section>

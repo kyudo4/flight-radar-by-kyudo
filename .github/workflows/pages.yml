@@ -29,14 +29,13 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          TG_BOT_USERNAME: ${{ secrets.TG_BOT_USERNAME }}
         run: |
           python3 - <<'PY'
           import json, os
           values = {
               "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
               "supabaseAnonKey": os.environ.get("SUPABASE_ANON_KEY", ""),
-              "telegramBotUsername": os.environ.get("TG_BOT_USERNAME", ""),
+              "telegramAuthProvider": "custom:telegram",
           }
           with open("site/config.js", "w") as f:
               f.write("window.ASIA_RADAR_CONFIG = " + json.dumps(values) + ";\n")

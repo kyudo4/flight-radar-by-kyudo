@@ -54,10 +54,6 @@ def telegram(method, payload):
         return json.loads(resp.read())
 
 
-def token_hash(value):
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
 def parse_date(value):
     return datetime.strptime(value, "%Y-%m-%d").date()
 
@@ -139,7 +135,6 @@ def process_link_updates():
     max_id = offset
     for update in response.get("result", []):
         max_id = max(max_id, update["update_id"])
-        message = update.get("message") or {}
         callback = update.get("callback_query") or {}
         if callback:
             data = callback.get("data", "")
@@ -156,22 +151,8 @@ def process_link_updates():
                             api("PATCH", "user_matches", body={"feedback": verdict}, params={"id": "eq." + match_id})
                     telegram("answerCallbackQuery", {"callback_query_id": callback.get("id"), "text": "Zapisano"})
             continue
-        text = message.get("text", "")
-        if not text.startswith("/start "):
-            continue
-        raw = text.split(" ", 1)[1].strip()
-        tokens = api("GET", "telegram_link_tokens", params={"token_hash": "eq." + token_hash(raw), "used_at": "is.null", "expires_at": "gt." + datetime.utcnow().isoformat() + "Z", "select": "user_id"})
-        if not tokens:
-            continue
-        chat = message.get("chat", {})
-        chat_id = str(chat.get("id"))
-        existing_chat = api("GET", "telegram_connections", params={"chat_id": "eq." + chat_id, "select": "user_id"})
-        if existing_chat and existing_chat[0]["user_id"] != tokens[0]["user_id"]:
-            telegram("sendMessage", {"chat_id": chat.get("id"), "text": "⚠️ Ten Telegram jest już połączony z innym kontem Flight Radar by Kyudo."})
-            continue
-        api("POST", "telegram_connections", body={"user_id": tokens[0]["user_id"], "chat_id": chat_id, "username": chat.get("username", "")}, params={"on_conflict": "user_id"})
-        api("PATCH", "telegram_link_tokens", body={"used_at": datetime.utcnow().isoformat() + "Z"}, params={"token_hash": "eq." + token_hash(raw)})
-        telegram("sendMessage", {"chat_id": chat.get("id"), "text": "✅ Flight Radar by Kyudo połączony. Alerty będą trafiać tutaj."})
+        # Wiadomości tekstowe nie służą do logowania. Powiązanie konta
+        # powstaje po zweryfikowanym logowaniu Telegram OIDC w panelu.
     api("PATCH", "telegram_state", body={"update_offset": max_id}, params={"id": "eq.1"})
 
 
