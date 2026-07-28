@@ -12,6 +12,7 @@ jej stanu, tokenów Telegrama ani historii alertów.
 - `monitor_scan_items` — trwała kolejka każdej konkretnej trasy, daty i klasy;
 - `scanner/` — skaner Python uruchamiany przez GitHub Actions;
 - `.github/workflows/scan.yml` — wspólny skan co 3 godziny;
+- `.github/workflows/telegram-feedback.yml` — odbiór reakcji z Telegrama co 5 minut;
 - Google Flights — wspólny kolektor z kontrolowanym limitem zapytań i retry dla przejściowych błędów;
 - RSS źródeł promocyjnych — Secret Flying, Fly4Free, LoyaltyLobby, OMAAT, Travel Dealz, View From The Wing, FlyerTalk i Reddit;
 - Telegram Login — jedyne logowanie i jednocześnie kanał alertów. Panel korzysta
@@ -22,13 +23,16 @@ jej stanu, tokenów Telegrama ani historii alertów.
 
 1. Utwórz projekt Supabase i wykonaj `supabase/schema.sql`. Jeśli baza już działała
    na wcześniejszej wersji, wykonaj dodatkowo migracje z katalogu `supabase/migrations/`
-   w kolejności dat, w tym `20260728_offer_read_policy.sql`.
+   w kolejności dat, w tym `20260728_offer_read_policy.sql` oraz
+   `20260728_auth_hardening.sql`.
 2. W BotFather > Bot Settings > Web Login dodaj domenę panelu jako Allowed Origin
    i pozostaw Client ID/Secret dla tego samego bota.
 3. W Supabase Edge Functions utwórz funkcję `telegram-auth` z pliku
    `supabase/functions/telegram-auth/index.ts`, wyłącz jej legacy JWT verification
    (funkcja sama sprawdza podpisany token Telegrama), a następnie dodaj sekrety
    `TELEGRAM_CLIENT_ID` i `TELEGRAM_CLIENT_SECRET`. Sekret klienta nie trafia do strony.
+   Funkcja ogranicza żądania do `https://kyudo4.github.io`; przy zmianie domeny ustaw
+   sekret `APP_ORIGIN` na nowy origin bez ścieżki.
 4. Ustaw adres projektu i anon key w `site/config.js` na podstawie `site/config.example.js`.
 5. Ustaw sekrety GitHub Actions: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
    `SUPABASE_ANON_KEY` i `TG_BOT_TOKEN`.
@@ -36,6 +40,9 @@ jej stanu, tokenów Telegrama ani historii alertów.
    `public.profiles` i wykonaj `supabase/bootstrap-admin.sql` po jego wpisaniu.
 7. Włącz GitHub Pages przez workflow `Publish Flight Radar by Kyudo dashboard`.
 8. Włącz workflow `Flight Radar by Kyudo scan`.
+9. Workflow `Flight Radar Telegram feedback` odbiera reakcje z przycisków maksymalnie
+   po około 5 minutach. `Flight Radar Telegram smoke test` służy wyłącznie do ręcznego
+   sprawdzenia dostarczenia wiadomości administratorowi.
 
 Do działania skanera potrzebny jest Python 3.11 i zależność `fast-flights`.
 Wyniki i ustawienia nie są zapisywane w repozytorium.
@@ -53,6 +60,7 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   a wykluczone linie są odrzucane przed zapisem;
 - panel ma dodatkowe lokalne filtrowanie wyników po trasie/linii, klasie,
   minimalnej ocenie oraz sortowanie po cenie, ocenie i świeżości;
+- panel pobiera oferty stronami po 40 i pozwala wczytać całą historię;
 - zapisanie lub wznowienie zmienionego monitora ustawia jego kolejkę do sprawdzenia
   w najbliższym przebiegu, zamiast czekać na poprzedni termin;
 - każda osoba ma własne monitory, dopasowania, feedback i połączenie Telegrama.
@@ -60,6 +68,9 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   użytkownik nie zapisze własnych filtrów.
 - pojedynczy monitoring przyjmuje maksymalnie 5 lotnisk wylotu i 5 celów; limit jest
   sprawdzany w panelu, bazie oraz skanerze.
+- panel i skaner sprawdzają kody względem globalnej listy IATA wygenerowanej z
+  publicznego zbioru OurAirports (`site/airports.json`). Aktualizacja listy:
+  `python scripts/generate_airports.py airports.csv site/airports.json`.
 - jeden monitoring może obejmować kilka klas jednocześnie, np. Business i First;
   każda klasa dostaje osobne zadania skanera.
 

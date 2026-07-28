@@ -113,6 +113,12 @@ create table public.telegram_state (
 );
 insert into public.telegram_state(id, update_offset) values (1, 0) on conflict (id) do nothing;
 
+create table public.telegram_auth_attempts (
+  id bigint generated always as identity primary key,
+  telegram_user_id text not null,
+  attempted_at timestamptz not null default now()
+);
+
 create table public.scan_runs (
   id uuid primary key default gen_random_uuid(),
   started_at timestamptz not null default now(),
@@ -138,6 +144,7 @@ create index monitor_scan_monitor_idx on public.monitor_scan_items(monitor_id);
 create index offers_route_date_idx on public.flight_offers(origin, destination, travel_date, cabin);
 create index matches_user_idx on public.user_matches(user_id, updated_at desc);
 create index scan_runs_started_idx on public.scan_runs(started_at desc);
+create index telegram_auth_attempts_lookup_idx on public.telegram_auth_attempts(telegram_user_id, attempted_at desc);
 
 create or replace function public.is_admin()
 returns boolean language sql stable security definer set search_path = public as $$
@@ -455,6 +462,8 @@ alter table public.flight_offers enable row level security;
 alter table public.user_matches enable row level security;
 alter table public.telegram_connections enable row level security;
 alter table public.telegram_state enable row level security;
+alter table public.telegram_auth_attempts enable row level security;
+revoke all on table public.telegram_auth_attempts from public, anon, authenticated;
 alter table public.scan_runs enable row level security;
 alter table public.feedback enable row level security;
 

@@ -1,8 +1,8 @@
-name: Flight Radar by Kyudo scan
+name: Flight Radar Telegram feedback
 
 on:
   schedule:
-    - cron: "17 */3 * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  scan:
+  feedback:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -19,14 +19,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run regression tests
-        run: python -m unittest discover -s tests -v
-      - name: Run shared scan
+      - name: Process Telegram feedback
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          FORCE_SCAN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          PROCESS_TELEGRAM_ONLY: "true"
         run: python scanner/friends_scanner.py

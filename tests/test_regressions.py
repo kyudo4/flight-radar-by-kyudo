@@ -55,6 +55,31 @@ class FlightRadarRegressionTests(unittest.TestCase):
         }
         self.assertEqual(scanner.monitor_combinations(monitor), [])
 
+    def test_monitor_rejects_unknown_iata_code(self):
+        monitor = {
+            "id": "monitor-invalid-airport",
+            "filters": {
+                "origins": ["ZZZ"], "destinations": ["BKK"],
+                "from": "2026-09-01", "to": "2026-09-01",
+                "cabin": "BUSINESS",
+            },
+        }
+        self.assertNotIn("ZZZ", scanner.VALID_AIRPORT_CODES)
+        self.assertEqual(scanner.monitor_combinations(monitor), [])
+
+    def test_paginated_history_reads_every_page(self):
+        calls = []
+
+        def fake_api(method, path, body=None, params=None):
+            calls.append(params.copy())
+            offset = int(params["offset"])
+            return [{"id": offset}, {"id": offset + 1}] if offset == 0 else [{"id": offset}]
+
+        with patch.object(scanner, "api", side_effect=fake_api):
+            rows = scanner.fetch_all_rows("user_matches", {"select": "id"}, page_size=2)
+        self.assertEqual([row["id"] for row in rows], [0, 1, 2])
+        self.assertEqual([call["offset"] for call in calls], ["0", "2"])
+
     def test_manual_scan_forces_existing_monitor_queue_due(self):
         calls = []
 
@@ -105,9 +130,11 @@ class FlightRadarRegressionTests(unittest.TestCase):
                 "airline": "QR", "price_pln": 5000,
             },
         }]
-        self.assertTrue(scanner.historical_duplicate(previous, "POZ → BKK", "QR", "2026-09-02", 5500))
-        self.assertFalse(scanner.historical_duplicate(previous, "POZ → BKK", "QR", "2026-09-02", 4900))
-        self.assertFalse(scanner.historical_duplicate(previous, "POZ → BKK", "EY", "2026-09-02", 5500))
+        previous[0]["flight_offers"]["cabin"] = "BUSINESS"
+        self.assertTrue(scanner.historical_duplicate(previous, "POZ → BKK", "BUSINESS", "QR", "2026-09-02", 5500))
+        self.assertFalse(scanner.historical_duplicate(previous, "POZ → BKK", "BUSINESS", "QR", "2026-09-02", 4900))
+        self.assertFalse(scanner.historical_duplicate(previous, "POZ → BKK", "BUSINESS", "EY", "2026-09-02", 5500))
+        self.assertFalse(scanner.historical_duplicate(previous, "POZ → BKK", "FIRST", "QR", "2026-09-02", 5500))
 
     def test_exact_ten_percent_drop_is_eligible(self):
         self.assertTrue(scanner.price_drop_eligible(5000, 4500, 10))
@@ -151,6 +178,25 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertTrue(rss.fresh(recent))
         self.assertFalse(rss.fresh(old))
         self.assertFalse(rss.fresh("Tue, 28 Jul 2030 10:00:00 +0000"))
+
+    def test_rss_keeps_detected_first_class_for_multi_cabin_monitor(self):
+        monitor = {
+            "filters": {
+                "origins": ["WAW"], "destinations": ["BKK"],
+                "from": "2026-09-01", "to": "2026-09-01",
+                "cabins": ["BUSINESS", "FIRST"], "cabin": "BUSINESS",
+            }
+        }
+        item = {
+            "title": "Warsaw to Bangkok First class 1.000 EUR",
+            "description": "2026-09-01, 12 hours, 1 stop",
+            "link": "https://example.com/deal", "source": "Test",
+        }
+        with patch.object(rss, "FEEDS", [{"name": "Test", "url": "https://example.com/rss"}]), \
+             patch.object(rss, "items", return_value=[item]):
+            candidates = rss.candidates([monitor])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0][1]["cabin"], "FIRST")
 
     def test_links_are_restricted_to_http(self):
         self.assertEqual(rss.safe_link("https://example.com/deal"), "https://example.com/deal")
@@ -266,7 +312,49 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('select("id, offer_id, stars, feedback, notified_at, updated_at")', app)
         self.assertIn('from("flight_offers")', app)
         self.assertIn('.in("id", offerIds)', app)
+        self.assertIn('.range(from, to)', app)
+        self.assertIn('if (offersLoading) return;', app)
         self.assertIn('flight_offers: byId.get(match.offer_id) || null', app)
+        self.assertIn('id="loadMoreOffersButton"', (ROOT / "site" / "index.html").read_text())
+
+    def test_google_block_uses_circuit_breaker(self):
+        source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn("except gflights.BlockedError as exc:", source)
+        self.assertIn("Przerwano Google po wykryciu blokady", source)
+        self.assertIn("break\n            except Exception", source)
+
+    def test_telegram_feedback_has_fast_separate_workflow(self):
+        workflow = (ROOT / ".github" / "workflows" / "telegram-feedback.yml").read_text()
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn('cron: "*/5 * * * *"', workflow)
+        self.assertIn('group: friends-backend', workflow)
+        self.assertIn('PROCESS_TELEGRAM_ONLY: "true"', workflow)
+        self.assertIn("if PROCESS_TELEGRAM_ONLY:", scanner_source)
+
+    def test_telegram_auth_is_origin_limited_and_rate_limited(self):
+        source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        self.assertNotIn("'Access-Control-Allow-Origin': '*'", source)
+        self.assertIn("APP_ORIGIN", source)
+        self.assertIn("telegram_auth_attempts", source)
+        self.assertIn("corsHeaders, 429", source)
+        self.assertIn("create table public.telegram_auth_attempts", schema)
+        self.assertIn("revoke all on table public.telegram_auth_attempts", schema)
+
+    def test_global_airport_dataset_is_large_and_contains_common_codes(self):
+        import json
+        airports = json.loads((ROOT / "site" / "airports.json").read_text())
+        self.assertGreater(len(airports), 5000)
+        for code in ("POZ", "BKK", "JFK", "LGA", "SYD"):
+            self.assertIn(code, airports)
+
+    def test_telegram_smoke_workflow_uses_real_delivery_script(self):
+        workflow = (ROOT / ".github" / "workflows" / "telegram-smoke.yml").read_text()
+        script = (ROOT / "scanner" / "telegram_smoke.py").read_text()
+        self.assertIn("workflow_dispatch", workflow)
+        self.assertIn("python scanner/telegram_smoke.py", workflow)
+        self.assertIn('scanner.telegram("sendMessage"', script)
+        self.assertIn('response.get("ok")', script)
 
     def test_admin_is_a_separate_role_gated_app_tab(self):
         html = (ROOT / "site" / "index.html").read_text()

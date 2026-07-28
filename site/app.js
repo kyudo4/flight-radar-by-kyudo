@@ -5,10 +5,12 @@
   const safeHref = value => /^https?:\/\//i.test(String(value || "")) ? esc(value) : "#";
   const configReady = cfg.supabaseUrl && cfg.supabaseAnonKey && !String(cfg.supabaseUrl).includes("YOUR_") && !String(cfg.supabaseAnonKey).includes("YOUR_");
   let client = null, user = null, profile = null, monitors = [], offers = [];
-  let editingMonitorId = null;
+  let editingMonitorId = null, airportDataReady = false, offerOffset = 0, offersHaveMore = false, offersLoading = false;
+  const OFFER_PAGE_SIZE = 40;
 
-  const AIRPORTS = { GDN: "Gdańsk", WAW: "Warszawa", POZ: "Poznań", OSL: "Oslo", ARN: "Sztokholm", CPH: "Kopenhaga", VIE: "Wiedeń", BUD: "Budapeszt", MXP: "Mediolan", IST: "Stambuł", BKK: "Bangkok", SIN: "Singapur", KUL: "Kuala Lumpur", HKG: "Hongkong", HAN: "Hanoi", SGN: "Ho Chi Minh", HND: "Tokio (Haneda)", NRT: "Tokio (Narita)", ICN: "Seul" };
-  const CABINS = { BUSINESS: "Business", FIRST: "First", PREMIUM_ECONOMY: "Premium Economy", ECONOMY: "Economy" };
+  const AIRPORT_OVERRIDES = { GDN: "Gdańsk", WAW: "Warszawa", POZ: "Poznań", OSL: "Oslo", ARN: "Sztokholm", CPH: "Kopenhaga", VIE: "Wiedeń", BUD: "Budapeszt", MXP: "Mediolan", IST: "Stambuł", BKK: "Bangkok", SIN: "Singapur", KUL: "Kuala Lumpur", HKG: "Hongkong", HAN: "Hanoi", SGN: "Ho Chi Minh", HND: "Tokio (Haneda)", NRT: "Tokio (Narita)", ICN: "Seul" };
+  const AIRPORTS = { ...AIRPORT_OVERRIDES };
+  const CABINS = { BUSINESS: "Business", FIRST: "First", PREMIUM_ECONOMY: "Premium Economy", "PREMIUM-ECONOMY": "Premium Economy", ECONOMY: "Economy" };
 
   function show(id, on = true) { $(id).classList.toggle("hidden", !on); }
   function message(text, good = false) { const el = $("authMessage"); el.textContent = text; el.className = "message" + (good ? " good" : ""); }
@@ -23,11 +25,26 @@
   const monitorCabins = filters => Array.isArray(filters?.cabins) && filters.cabins.length ? filters.cabins : (filters?.cabin ? [filters.cabin] : []);
   const offerData = match => { const relation = match?.flight_offers; return Array.isArray(relation) ? (relation[0] || {}) : (relation || {}); };
 
+  async function loadAirportData() {
+    try {
+      const response = await fetch("airports.json", { cache: "force-cache" });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (data && typeof data === "object" && Object.keys(data).length > 5000) {
+        Object.assign(AIRPORTS, data, AIRPORT_OVERRIDES);
+        airportDataReady = true;
+      }
+    } catch (_error) {
+      // Wbudowana lista najczęstszych lotnisk pozostaje bezpiecznym fallbackiem.
+    }
+  }
+
   async function init() {
     $("themeButton").onclick = () => { document.body.classList.toggle("dark"); localStorage.setItem("afr-theme", document.body.classList.contains("dark") ? "dark" : "light"); };
     if (localStorage.getItem("afr-theme") === "dark") document.body.classList.add("dark");
     $("signOutButton").onclick = () => client?.auth.signOut();
     $("telegramLoginButton").onclick = signInWithTelegram;
+    await loadAirportData();
     if (!configReady || !window.supabase) { show("setupView"); return; }
     client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
     client.auth.onAuthStateChange((_event, session) => { user = session?.user || null; loadApp().catch(err => message(err.message)); });
@@ -53,12 +70,13 @@
     $("monitorsSectionTab").onclick = () => focusRadarSection("monitors");
     showAppTab("radar");
     await syncTelegramConnection();
-    await Promise.all([loadMonitors(), loadOffers()]);
+    await Promise.all([loadMonitors(), loadOffers(true)]);
     if (profile.role === "admin") await loadAdmin();
     $("newMonitorButton").onclick = () => openMonitorDialog();
     $("closeDialog").onclick = $("cancelDialog").onclick = () => $("monitorDialog").close();
     $("monitorForm").onsubmit = saveMonitor;
-    $("refreshButton").onclick = () => Promise.all([loadMonitors(), loadOffers()]);
+    $("refreshButton").onclick = () => Promise.all([loadMonitors(), loadOffers(true)]);
+    $("loadMoreOffersButton").onclick = () => loadOffers(false);
     ["offerSearch", "offerCabinFilter", "offerStarsFilter", "offerSort"].forEach(id => $(id).oninput = renderOffers);
   }
 
@@ -126,9 +144,9 @@
     const cabins = [...document.querySelectorAll("input[name='monitorCabin']:checked")].map(input => input.value), budgetRaw = $("monitorBudget").value.trim(), durationRaw = $("monitorDuration").value.trim(), stopsRaw = $("monitorStops").value.trim();
     const starsRaw = $("telegramStars").value, dropRaw = $("telegramDrop").value.trim();
     const budget = Number(budgetRaw), maxDuration = Number(durationRaw), maxStops = Number(stopsRaw), telegramStars = Number(starsRaw), telegramDrop = Number(dropRaw);
-    const validIata = values => values.length > 0 && values.every(value => /^[A-Z]{3}$/.test(value));
+    const validIata = values => values.length > 0 && values.every(value => /^[A-Z]{3}$/.test(value) && (!airportDataReady || Boolean(AIRPORTS[value])));
     if (!name) { $("formMessage").textContent = "Podaj nazwę monitoringu."; return; }
-    if (!validIata(origins) || !validIata(destinations) || origins.length > 5 || destinations.length > 5) { $("formMessage").textContent = "Wpisz od 1 do 5 lotnisk wylotu i maksymalnie 5 celów jako trzyznakowe kody IATA."; return; }
+    if (!validIata(origins) || !validIata(destinations) || origins.length > 5 || destinations.length > 5) { $("formMessage").textContent = "Wpisz od 1 do 5 prawidłowych kodów lotnisk IATA po każdej stronie."; return; }
     const days = from && to ? Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1 : 0;
     if (!from || !to || from > to || days > 32) { $("formMessage").textContent = "Zakres dat jest nieprawidłowy (maksymalnie 32 dni)."; return; }
     if (!cabins.length || cabins.length > 4 || !budgetRaw || !durationRaw || !stopsRaw || !starsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || !Number.isFinite(maxDuration) || maxDuration <= 0 || maxDuration > 24 || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isInteger(telegramStars) || telegramStars < 3 || telegramStars > 5 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Wybierz co najmniej jedną klasę i uzupełnij wszystkie wymagane kryteria. Czas może wynosić maksymalnie 24 h, a przesiadki 0–9."; return; }
@@ -151,33 +169,49 @@
     if (!result.error) { $("monitorDialog").close(); $("monitorForm").reset(); editingMonitorId = null; await loadMonitors(); }
   }
   async function updateMonitor(id, patch) { const update = patch.status === "active" ? { ...patch, last_scanned_at: null, next_scan_at: new Date().toISOString() } : patch; try { const { error } = await client.from("monitors").update(update).eq("id", id).eq("user_id", user.id); if (error) throw error; await loadMonitors(); } catch (error) { alert(`Nie udało się zmienić monitora: ${error.message || "błąd połączenia"}`); } }
-  async function deleteMonitor(id) { if (!confirm("Usunąć ten monitoring?")) return; try { const { error } = await client.from("monitors").delete().eq("id", id).eq("user_id", user.id); if (error) throw error; await Promise.all([loadMonitors(), loadOffers()]); } catch (error) { alert(`Nie udało się usunąć monitora: ${error.message || "błąd połączenia"}`); } }
+  async function deleteMonitor(id) { if (!confirm("Usunąć ten monitoring?")) return; try { const { error } = await client.from("monitors").delete().eq("id", id).eq("user_id", user.id); if (error) throw error; await Promise.all([loadMonitors(), loadOffers(true)]); } catch (error) { alert(`Nie udało się usunąć monitora: ${error.message || "błąd połączenia"}`); } }
 
-  async function loadOffers() {
+  async function loadOffers(reset = true) {
     // Do not rely on PostgREST's nested relationship response here. Depending
     // on the schema cache/RLS state it can return the match while leaving the
     // related offer as null. Fetch the two tables explicitly and join in the
     // browser using the guaranteed foreign key.
-    const { data: matches, error: matchError } = await client.from("user_matches")
-      .select("id, offer_id, stars, feedback, notified_at, updated_at")
-      .eq("visible", true)
-      .order("updated_at", { ascending: false })
-      .limit(40);
-    if (matchError) throw matchError;
-    const matchRows = matches || [];
-    const offerIds = [...new Set(matchRows.map(match => match.offer_id).filter(Boolean))];
-    let offerRows = [];
-    if (offerIds.length) {
-      const { data, error } = await client.from("flight_offers")
-        .select("id,route,origin,destination,travel_date,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags")
-        .in("id", offerIds);
-      if (error) throw error;
-      offerRows = data || [];
+    if (offersLoading) return;
+    offersLoading = true;
+    const button = $("loadMoreOffersButton");
+    button.disabled = true;
+    if (reset) { offerOffset = 0; offers = []; }
+    const from = offerOffset;
+    const to = from + OFFER_PAGE_SIZE - 1;
+    try {
+      const { data: matches, error: matchError } = await client.from("user_matches")
+        .select("id, offer_id, stars, feedback, notified_at, updated_at")
+        .eq("visible", true)
+        .order("updated_at", { ascending: false })
+        .range(from, to);
+      if (matchError) throw matchError;
+      const matchRows = matches || [];
+      const offerIds = [...new Set(matchRows.map(match => match.offer_id).filter(Boolean))];
+      let offerRows = [];
+      if (offerIds.length) {
+        const { data, error } = await client.from("flight_offers")
+          .select("id,route,origin,destination,travel_date,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags")
+          .in("id", offerIds);
+        if (error) throw error;
+        offerRows = data || [];
+      }
+      const byId = new Map(offerRows.map(offer => [offer.id, offer]));
+      const page = matchRows.map(match => ({ ...match, flight_offers: byId.get(match.offer_id) || null }));
+      offers = reset ? page : [...offers, ...page];
+      offerOffset += matchRows.length;
+      offersHaveMore = matchRows.length === OFFER_PAGE_SIZE;
+      show("loadMoreOffersButton", offersHaveMore);
+      renderOffers();
+      const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: co 3 godziny</span><span>🔐 Wyniki tylko dla Ciebie</span>`;
+    } finally {
+      offersLoading = false;
+      button.disabled = false;
     }
-    const byId = new Map(offerRows.map(offer => [offer.id, offer]));
-    offers = matchRows.map(match => ({ ...match, flight_offers: byId.get(match.offer_id) || null }));
-    renderOffers();
-    const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: co 3 godziny</span><span>🔐 Wyniki tylko dla Ciebie</span>`;
   }
   function renderOffers() {
     const query = String($("offerSearch")?.value || "").trim().toLowerCase();
@@ -188,7 +222,8 @@
       const offer = offerData(match);
       if (!offer.route || !offer.travel_date || !offer.airline_name || !Number.isFinite(Number(offer.price_pln)) || Number(offer.price_pln) <= 0) return false;
       const haystack = `${offer.route || ""} ${offer.airline_name || ""} ${offer.source || ""}`.toLowerCase();
-      return (!query || haystack.includes(query)) && (!cabin || offer.cabin === cabin) && Number(match.stars || 0) >= minStars;
+      const normalizedCabin = String(offer.cabin || "").replace("-", "_");
+      return (!query || haystack.includes(query)) && (!cabin || normalizedCabin === cabin) && Number(match.stars || 0) >= minStars;
     }).sort((a, b) => {
       const ao = offerData(a), bo = offerData(b);
       if (sort === "price") return Number(ao.price_pln || Infinity) - Number(bo.price_pln || Infinity);

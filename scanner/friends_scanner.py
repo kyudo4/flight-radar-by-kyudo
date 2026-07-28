@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import gflights
 import rss
@@ -22,9 +23,21 @@ MAX_FIRST = max(1, min(10, int(os.environ.get("MAX_FIRST_QUERIES", "4"))))
 MAX_AIRPORTS_PER_SIDE = 5
 SCAN_INTERVAL_HOURS = 3
 FORCE_SCAN = os.environ.get("FORCE_SCAN", "false").lower() == "true"
+PROCESS_TELEGRAM_ONLY = os.environ.get("PROCESS_TELEGRAM_ONLY", "false").lower() == "true"
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))
 FETCH_RETRIES = 2
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
+AIRPORTS_FILE = Path(__file__).resolve().parents[1] / "site" / "airports.json"
+
+
+def load_airport_codes():
+    try:
+        return set(json.loads(AIRPORTS_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+VALID_AIRPORT_CODES = load_airport_codes()
 
 
 def log(text):
@@ -83,7 +96,8 @@ def monitor_combinations(monitor):
     cabins = sorted({str(value).lower().replace("_", "-") for value in raw_cabins if str(value).upper() in {"BUSINESS", "FIRST", "PREMIUM_ECONOMY", "ECONOMY"}})
     if (not origins or not destinations or not dates
             or len(origins) > MAX_AIRPORTS_PER_SIDE
-            or len(destinations) > MAX_AIRPORTS_PER_SIDE):
+            or len(destinations) > MAX_AIRPORTS_PER_SIDE
+            or (VALID_AIRPORT_CODES and any(code not in VALID_AIRPORT_CODES for code in origins + destinations))):
         return []
     return [{"monitor_id": monitor["id"], "origin": origin, "destination": destination,
              "travel_date": day.isoformat(), "cabin": cabin}
@@ -99,9 +113,10 @@ def task_from_item(item):
 def sync_monitor_scan_items(monitor):
     """Materializuje każdą kombinację monitora jako niezależną pozycję kolejki."""
     desired = monitor_combinations(monitor)
-    existing = api("GET", "monitor_scan_items", params={
+    existing = fetch_all_rows("monitor_scan_items", {
         "monitor_id": "eq." + monitor["id"],
         "select": "id,origin,destination,travel_date,cabin",
+        "order": "created_at.asc,id.asc",
     })
     desired_keys = {(x["origin"], x["destination"], x["travel_date"], x["cabin"]) for x in desired}
     stale = [x["id"] for x in existing if (x["origin"], x["destination"], x["travel_date"], x["cabin"]) not in desired_keys]
@@ -137,11 +152,18 @@ def fetch_due_scan_items(active_ids, now):
     }
     # Pobieramy kolejkę stronami, żeby duża liczba monitorów nie obcinała
     # późniejszych użytkowników na stałym limicie jednego zapytania REST.
+    # Supabase/PostgREST commonly caps a single response at 1000 rows even if
+    # a larger limit is requested. Using that size guarantees the next page is
+    # fetched instead of mistaking the server cap for the end of the queue.
+    return fetch_all_rows("monitor_scan_items", base_params, page_size=1000)
+
+
+def fetch_all_rows(path, params, page_size=1000):
+    """Read every PostgREST page so history-dependent rules stay durable."""
     result = []
     offset = 0
-    page_size = 5000
     while True:
-        page = api("GET", "monitor_scan_items", params={**base_params, "limit": str(page_size), "offset": str(offset)})
+        page = api("GET", path, params={**params, "limit": str(page_size), "offset": str(offset)})
         result.extend(page)
         if len(page) < page_size:
             return result
@@ -277,11 +299,15 @@ def score(flight, filters, feedback=None):
 
 
 def fetch_existing(monitor_id):
-    return api("GET", "user_matches", params={"monitor_id": "eq." + monitor_id, "select": "id,offer_id,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(route,origin,destination,travel_date,airline,airline_name,price_pln)"})
+    return fetch_all_rows("user_matches", {
+        "monitor_id": "eq." + monitor_id,
+        "select": "id,offer_id,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(route,origin,destination,travel_date,cabin,airline,airline_name,price_pln)",
+        "order": "updated_at.asc,id.asc",
+    })
 
 
 def save_offer(task, flight):
-    payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "cabin": task["cabin"].upper(), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": flight.get("tags", []), "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
+    payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "cabin": task["cabin"].upper().replace("-", "_"), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": flight.get("tags", []), "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
     rows = api("POST", "flight_offers", body=payload, params={"on_conflict": "fingerprint"})
     return rows[0] if rows else api("GET", "flight_offers", params={"fingerprint": "eq." + payload["fingerprint"], "select": "*"})[0]
 
@@ -307,13 +333,15 @@ def airline_identity(flight):
     return " ".join(str(flight.get("airline_name") or "").lower().split())
 
 
-def historical_duplicate(previous, route, airline, travel_date, price):
+def historical_duplicate(previous, route, cabin, airline, travel_date, price):
     if price is None or not airline:
         return False
     prices = []
     for old in previous:
         offer = old.get("flight_offers") or {}
-        if offer.get("route") != route or airline_identity(offer) != airline or offer.get("travel_date") == travel_date:
+        old_cabin = str(offer.get("cabin") or "").upper().replace("-", "_")
+        if (offer.get("route") != route or old_cabin != cabin
+                or airline_identity(offer) != airline or offer.get("travel_date") == travel_date):
             continue
         for value in (offer.get("price_pln"), old.get("min_price_for_user")):
             if value is not None:
@@ -386,6 +414,7 @@ def process_candidate(monitor, task, flight):
         return 0, 0
     previous = fetch_existing(monitor["id"])
     route = "%s → %s" % (task["origin"], task["dest"])
+    cabin = str(task.get("cabin") or "").upper().replace("-", "_")
     airline = airline_identity(flight)
     previous_prices = []
     matching_feedback = []
@@ -393,15 +422,16 @@ def process_candidate(monitor, task, flight):
     for old in previous if airline else []:
         old_offer = old.get("flight_offers") or {}
         old_airline = airline_identity(old_offer)
-        if old_offer.get("route") == route:
+        old_cabin = str(old_offer.get("cabin") or "").upper().replace("-", "_")
+        if old_offer.get("route") == route and old_cabin == cabin:
             route_airlines.add(old_airline)
-        if old_offer.get("route") == route and old_airline == airline:
+        if old_offer.get("route") == route and old_cabin == cabin and old_airline == airline:
             if old.get("feedback"):
                 matching_feedback.append(old["feedback"])
             for value in (old_offer.get("price_pln"), old.get("min_price_for_user")):
                 if value is not None:
                     previous_prices.append(int(value))
-    if historical_duplicate(previous, route, airline, task["date"], flight.get("price_pln")):
+    if historical_duplicate(previous, route, cabin, airline, task["date"], flight.get("price_pln")):
         # Nowy dzień tej samej trasy i linii nie jest nową okazją, jeśli kosztuje tyle samo lub więcej.
         return 0, 0
     offer = save_offer(task, flight)
@@ -438,6 +468,11 @@ def main():
     except Exception as exc:
         # Awaria Telegrama nie może zatrzymać pobierania ofert z Google.
         log("Pominięto synchronizację Telegrama po błędzie: %s" % str(exc)[:160])
+        if PROCESS_TELEGRAM_ONLY:
+            raise
+    if PROCESS_TELEGRAM_ONLY:
+        log("Przetworzono kolejkę odpowiedzi Telegrama")
+        return
     now = datetime.utcnow()
     active_profiles = api("GET", "profiles", params={"status": "eq.active", "select": "id", "limit": "20"})
     active_ids = [row["id"] for row in active_profiles]
@@ -483,6 +518,12 @@ def main():
         for task in tasks:
             try:
                 _level, flights = fetch_task(task)
+            except gflights.BlockedError as exc:
+                # Jedna twarda blokada zatrzymuje cały kolektor Google. Kolejne
+                # pozycje pozostają zaległe i wrócą w następnym przebiegu.
+                task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
+                log("Przerwano Google po wykryciu blokady: %s" % task_errors[-1])
+                break
             except Exception as exc:
                 task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
                 log("Pominięto zapytanie po błędzie źródła: %s" % task_errors[-1])
@@ -508,7 +549,8 @@ def main():
         # RSS nie zużywa limitu zapytań Google, ale przechodzi ten sam filtr
         # dat, klasy, trasy i osobnych reguł Telegrama.
         for monitor, flight, origin, dest, travel_date in rss.candidates(active):
-            task = {"origin": origin, "dest": dest, "date": travel_date, "cabin": (monitor.get("filters") or {}).get("cabin", "BUSINESS")}
+            task = {"origin": origin, "dest": dest, "date": travel_date,
+                    "cabin": str(flight.get("cabin") or "BUSINESS").lower().replace("_", "-")}
             try:
                 added, sent = process_candidate(monitor, task, flight)
                 offers_count += added; sent_count += sent
