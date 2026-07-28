@@ -1,0 +1,49 @@
+name: Publish Friends dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate public frontend config
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TG_BOT_USERNAME: ${{ secrets.TG_BOT_USERNAME }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          values = {
+              "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
+              "supabaseAnonKey": os.environ.get("SUPABASE_ANON_KEY", ""),
+              "telegramBotUsername": os.environ.get("TG_BOT_USERNAME", ""),
+          }
+          with open("site/config.js", "w") as f:
+              f.write("window.ASIA_RADAR_CONFIG = " + json.dumps(values) + ";\n")
+          PY
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

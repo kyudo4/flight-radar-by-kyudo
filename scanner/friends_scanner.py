@@ -9,6 +9,7 @@ import urllib.request
 from datetime import date, datetime, timedelta
 
 import gflights
+import rss
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -35,7 +36,10 @@ def api(method, path, body=None, params=None):
     req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "application/json")
     if body is not None:
-        req.add_header("Prefer", "return=representation")
+        preference = "return=representation"
+        if params and "on_conflict" in params:
+            preference = "resolution=merge-duplicates,return=representation"
+        req.add_header("Prefer", preference)
     with urllib.request.urlopen(req, timeout=30) as resp:
         raw = resp.read()
         return json.loads(raw) if raw else []
@@ -103,7 +107,7 @@ def quality(flight, filters):
 def score(flight, filters):
     price = flight.get("price_pln") or 999999
     budget = int(filters.get("budget_pln") or 999999)
-    stars = 5 if price <= budget * .70 else 4 if price <= budget else 3 if price <= budget * 1.15 else 2
+    stars = 5 if price <= budget * .55 else 4 if price <= budget * .75 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
     if flight.get("airline") in PRIORITY:
         stars = min(5, stars + 1)
     if flight.get("duration_h") and flight["duration_h"] > 20:
@@ -112,11 +116,11 @@ def score(flight, filters):
 
 
 def fetch_existing(monitor_id):
-    return api("GET", "user_matches", params={"monitor_id": "eq." + monitor_id, "select": "id,offer_id,notified_at,last_notified_price,min_price_for_user"})
+    return api("GET", "user_matches", params={"monitor_id": "eq." + monitor_id, "select": "id,offer_id,notified_at,last_notified_price,min_price_for_user,flight_offers(route,origin,destination,travel_date,airline,airline_name,price_pln)"})
 
 
 def save_offer(task, flight):
-    payload = {"fingerprint": offer_fingerprint(task, flight), "source": "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "cabin": task["cabin"].upper(), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "link": flight.get("link", ""), "raw": flight}
+    payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "cabin": task["cabin"].upper(), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "tags": flight.get("tags", []), "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
     rows = api("POST", "flight_offers", body=payload, params={"on_conflict": "fingerprint"})
     return rows[0] if rows else api("GET", "flight_offers", params={"fingerprint": "eq." + payload["fingerprint"], "select": "*"})[0]
 
@@ -156,11 +160,16 @@ def process_link_updates():
         if not text.startswith("/start "):
             continue
         raw = text.split(" ", 1)[1].strip()
-        tokens = api("GET", "telegram_link_tokens", params={"token_hash": "eq." + token_hash(raw), "used_at": "is.null", "select": "user_id"})
+        tokens = api("GET", "telegram_link_tokens", params={"token_hash": "eq." + token_hash(raw), "used_at": "is.null", "expires_at": "gt." + datetime.utcnow().isoformat() + "Z", "select": "user_id"})
         if not tokens:
             continue
         chat = message.get("chat", {})
-        api("POST", "telegram_connections", body={"user_id": tokens[0]["user_id"], "chat_id": str(chat.get("id")), "username": chat.get("username", "")}, params={"on_conflict": "user_id"})
+        chat_id = str(chat.get("id"))
+        existing_chat = api("GET", "telegram_connections", params={"chat_id": "eq." + chat_id, "select": "user_id"})
+        if existing_chat and existing_chat[0]["user_id"] != tokens[0]["user_id"]:
+            telegram("sendMessage", {"chat_id": chat.get("id"), "text": "⚠️ Ten Telegram jest już połączony z innym kontem Friends."})
+            continue
+        api("POST", "telegram_connections", body={"user_id": tokens[0]["user_id"], "chat_id": chat_id, "username": chat.get("username", "")}, params={"on_conflict": "user_id"})
         api("PATCH", "telegram_link_tokens", body={"used_at": datetime.utcnow().isoformat() + "Z"}, params={"token_hash": "eq." + token_hash(raw)})
         telegram("sendMessage", {"chat_id": chat.get("id"), "text": "✅ Asia Flight Radar Friends połączony. Alerty będą trafiać tutaj."})
     api("PATCH", "telegram_state", body={"update_offset": max_id}, params={"id": "eq.1"})
@@ -186,6 +195,31 @@ def send_due_alert(match, offer, monitor, connection):
     return True
 
 
+def process_candidate(monitor, task, flight):
+    if not quality(flight, monitor.get("filters") or {}):
+        return 0, 0
+    previous = fetch_existing(monitor["id"])
+    route = "%s → %s" % (task["origin"], task["dest"])
+    airline = (flight.get("airline") or flight.get("airline_name") or "").lower()
+    for old in previous if airline else []:
+        old_offer = old.get("flight_offers") or {}
+        old_airline = (old_offer.get("airline") or old_offer.get("airline_name") or "").lower()
+        old_price = old_offer.get("price_pln") or old.get("min_price_for_user")
+        if (old_offer.get("route") == route and old_airline == airline and old_offer.get("travel_date") != task["date"]
+                and old_price is not None and flight.get("price_pln") is not None and flight["price_pln"] >= old_price):
+            # Nowy dzień tej samej trasy i linii nie jest nową okazją, jeśli kosztuje tyle samo lub więcej.
+            return 0, 0
+    offer = save_offer(task, flight)
+    row = next((x for x in previous if x["offer_id"] == offer["id"]), None)
+    prices = [x.get("min_price_for_user") for x in previous if x.get("min_price_for_user")]
+    prices.append(flight.get("price_pln"))
+    match = {"user_id": monitor["user_id"], "monitor_id": monitor["id"], "offer_id": offer["id"], "stars": score(flight, monitor.get("filters") or {}), "min_price_for_user": min(prices)}
+    saved = api("POST", "user_matches", body=match, params={"on_conflict": "user_id,monitor_id,offer_id"})
+    current = saved[0] if saved else (row or match)
+    connection = api("GET", "telegram_connections", params={"user_id": "eq." + monitor["user_id"], "select": "chat_id"})
+    return 1, int(send_due_alert(current, offer, monitor, connection[0] if connection else None))
+
+
 def main():
     if not SUPABASE_URL or not SERVICE_KEY:
         raise SystemExit("Brak sekretów Supabase")
@@ -200,6 +234,9 @@ def main():
             api("PATCH", "monitors", body={"status": "expired"}, params={"id": "eq." + monitor["id"]})
             continue
         active.append(monitor)
+    # Najdawniej sprawdzane monitory trafiają na początek kolejki, więc przy
+    # ograniczeniu liczby zapytań jedna osoba nie może stale wypierać innych.
+    active.sort(key=lambda item: (item.get("last_scanned_at") or "", item.get("created_at") or ""))
     tasks_by_key = {}
     for monitor in active:
         task = expand_one_monitor(monitor, tick)
@@ -215,25 +252,29 @@ def main():
     run = api("POST", "scan_runs", body={"query_count": len(tasks), "status": "running"})[0]
     offers_count = 0
     sent_count = 0
+    task_errors = []
     try:
         for task in tasks:
-            _level, flights = gflights.fetch_gf(task["origin"], task["dest"], task["date"], seat=task["cabin"])
+            try:
+                _level, flights = gflights.fetch_gf(task["origin"], task["dest"], task["date"], seat=task["cabin"])
+            except Exception as exc:
+                task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
+                log("Pominięto zapytanie po błędzie źródła: %s" % task_errors[-1])
+                continue
             for flight in gflights.cheapest_picks(flights, PRIORITY, max_options=3):
-                related = [m for m in active if m["id"] in task["monitor_ids"] and quality(flight, m.get("filters") or {})]
-                if not related:
-                    continue
-                offer = save_offer(task, flight); offers_count += 1
+                related = [m for m in active if m["id"] in task["monitor_ids"]]
                 for monitor in related:
-                    previous = fetch_existing(monitor["id"])
-                    row = next((x for x in previous if x["offer_id"] == offer["id"]), None)
-                    match = {"user_id": monitor["user_id"], "monitor_id": monitor["id"], "offer_id": offer["id"], "stars": score(flight, monitor.get("filters") or {}), "min_price_for_user": min([x.get("min_price_for_user") for x in previous if x.get("min_price_for_user")] + [flight.get("price_pln")])}
-                    saved = api("POST", "user_matches", body=match, params={"on_conflict": "user_id,monitor_id,offer_id"})
-                    current = saved[0] if saved else (row or match)
-                    connection = api("GET", "telegram_connections", params={"user_id": "eq." + monitor["user_id"], "select": "chat_id"})
-                    if send_due_alert(current, offer, monitor, connection[0] if connection else None): sent_count += 1
+                    added, sent = process_candidate(monitor, task, flight)
+                    offers_count += added; sent_count += sent
             time.sleep(2.0)
             api("PATCH", "monitors", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=3)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["monitor_ids"])})
-        api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "offer_count": offers_count, "status": "ok"}, params={"id": "eq." + run["id"]})
+        # RSS nie zużywa limitu zapytań Google, ale przechodzi ten sam filtr
+        # dat, klasy, trasy i osobnych reguł Telegrama.
+        for monitor, flight, origin, dest, travel_date in rss.candidates(active):
+            task = {"origin": origin, "dest": dest, "date": travel_date, "cabin": (monitor.get("filters") or {}).get("cabin", "BUSINESS")}
+            added, sent = process_candidate(monitor, task, flight)
+            offers_count += added; sent_count += sent
+        api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "offer_count": offers_count, "status": "partial" if task_errors else "ok", "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
         log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
     except Exception as exc:
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "offer_count": offers_count, "status": "error", "error": str(exc)[:500]}, params={"id": "eq." + run["id"]})

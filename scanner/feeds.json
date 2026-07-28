@@ -1,0 +1,10 @@
+[
+  {"name":"LoyaltyLobby","url":"https://loyaltylobby.com/feed/"},
+  {"name":"One Mile at a Time","url":"https://onemileatatime.com/feed/"},
+  {"name":"Travel Dealz","url":"https://travel-dealz.com/feed/"},
+  {"name":"Secret Flying","url":"https://news.google.com/rss/search?q=site:secretflying.com+business+OR+first+when:14d&hl=en-US&gl=US&ceid=US:en"},
+  {"name":"Fly4Free","url":"https://news.google.com/rss/search?q=site:fly4free.com+business+class+when:14d&hl=en-US&gl=US&ceid=US:en"},
+  {"name":"View From The Wing","url":"https://news.google.com/rss/search?q=site:viewfromthewing.com+fare+deal+when:14d&hl=en-US&gl=US&ceid=US:en"},
+  {"name":"FlyerTalk Premium Deals","url":"https://news.google.com/rss/search?q=site:flyertalk.com+premium+fare+OR+business+class+when:14d&hl=en-US&gl=US&ceid=US:en"},
+  {"name":"Reddit r/flightdeals","url":"https://www.reddit.com/r/flightdeals/search.rss?q=business+class&restrict_sr=on&sort=new"}
+]

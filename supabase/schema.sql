@@ -172,13 +172,19 @@ create or replace function public.claim_invite(invite_token text)
 returns boolean language plpgsql security definer set search_path = public as $$
 declare
   invite_row public.invites;
+  active_count integer;
 begin
+  -- Jednoznaczny limit dziesięciu aktywnych miejsc także przy dwóch
+  -- jednoczesnych kliknięciach w linki zaproszeń.
+  perform pg_advisory_xact_lock(47010);
   select * into invite_row from public.invites
   where token_hash = encode(digest(invite_token, 'sha256'), 'hex')
     and claimed_at is null and revoked_at is null and expires_at > now()
     and (email is null or lower(email) = lower((select email from auth.users where id = auth.uid())))
   for update;
   if not found then return false; end if;
+  select count(*) into active_count from public.profiles where status = 'active';
+  if active_count >= 10 then return false; end if;
   update public.profiles set status = 'active' where id = auth.uid();
   update public.invites set claimed_at = now() where id = invite_row.id;
   return true;
