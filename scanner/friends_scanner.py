@@ -281,17 +281,12 @@ def quality(flight, filters):
 
 
 def budget_ok(flight, filters):
-    """Nie zapisuj zwykłych ofert powyżej budżetu monitora.
-
-    Error/Mistake Fares są jedynym świadomym wyjątkiem, bo mogą być okazją
-    mimo przekroczenia ustawionego limitu.
-    """
+    """Budżet monitora jest zawsze twardym limitem ceny."""
     price = flight.get("price_pln")
     if price is None:
         return False
     budget = float(filters.get("budget_pln") or 999999)
-    exceptional = set(flight.get("tags") or []) & {"Error Fare", "Mistake Fare"}
-    return float(price) <= budget or bool(exceptional)
+    return float(price) <= budget
 
 
 def score(flight, filters, feedback=None):
@@ -379,7 +374,7 @@ def send_due_alert(match, offer, monitor, connection):
         return False
     price = offer.get("price_pln") or 0
     budget = int((monitor.get("filters") or {}).get("budget_pln") or 999999)
-    if price > budget and not (set(offer.get("tags") or []) & {"Error Fare", "Mistake Fare"}):
+    if price > budget:
         return False
     old = match.get("last_notified_price")
     drop = float(rules.get("drop_percent") or 10) / 100

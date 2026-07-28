@@ -47,8 +47,17 @@
     await loadAirportData();
     if (!configReady || !window.supabase) { show("setupView"); return; }
     client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
-    client.auth.onAuthStateChange((_event, session) => { user = session?.user || null; loadApp().catch(err => message(err.message)); });
-    const { data } = await client.auth.getSession(); user = data.session?.user || null; await loadApp();
+    const { data, error } = await client.auth.getSession();
+    if (error) throw error;
+    user = data.session?.user || null;
+    await loadApp();
+    client.auth.onAuthStateChange((event, session) => {
+      // getSession() above already rendered the initial state. Ignoring the
+      // subscription's duplicate initial event prevents two overlapping loads.
+      if (event === "INITIAL_SESSION") return;
+      user = session?.user || null;
+      loadApp().catch(err => message(err.message));
+    });
   }
 
   async function loadApp() {
@@ -103,7 +112,7 @@
   }
 
   async function loadMonitors() {
-    const { data, error } = await client.from("monitors").select("*").order("created_at", { ascending: false });
+    const { data, error } = await client.from("monitors").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
     if (error) throw error; monitors = data || []; $("monitorCount").textContent = `${monitors.length}/2 wykorzystane`;
     $("monitorList").innerHTML = monitors.length ? monitors.map(renderMonitor).join("") : `<div class="empty">Czysta karta. Ustaw własne kryteria, aby uruchomić pierwszy monitoring.</div>`;
     document.querySelectorAll("[data-action='edit']").forEach(btn => btn.onclick = () => openMonitorDialog(monitors.find(m => m.id === btn.dataset.id)));
@@ -187,6 +196,7 @@
     try {
       const { data: matches, error: matchError } = await client.from("user_matches")
         .select("id, monitor_id, offer_id, stars, feedback, notified_at, updated_at")
+        .eq("user_id", user.id)
         .eq("visible", true)
         .order("updated_at", { ascending: false })
         .range(from, to);
@@ -224,8 +234,7 @@
       if (!offer.route || !offer.travel_date || !offer.airline_name || !Number.isFinite(Number(offer.price_pln)) || Number(offer.price_pln) <= 0) return false;
       const monitor = monitors.find(item => item.id === match.monitor_id);
       const budget = Number(monitor?.filters?.budget_pln);
-      const exceptional = (offer.tags || []).some(tag => tag === "Error Fare" || tag === "Mistake Fare");
-      if (!monitor || !Number.isFinite(budget) || budget <= 0 || (Number(offer.price_pln) > budget && !exceptional)) return false;
+      if (!monitor || !Number.isFinite(budget) || budget <= 0 || Number(offer.price_pln) > budget) return false;
       const haystack = `${offer.route || ""} ${routeName(offer.route)} ${offer.airline_name || ""} ${offer.source || ""}`.toLowerCase();
       const normalizedCabin = String(offer.cabin || "").replace("-", "_");
       return (!query || haystack.includes(query)) && (!cabin || normalizedCabin === cabin) && Number(match.stars || 0) >= minStars;

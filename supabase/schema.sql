@@ -162,6 +162,19 @@ returns boolean language sql stable security definer set search_path = public as
   );
 $$;
 
+create or replace function public.match_within_monitor_budget(p_match_id uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1
+    from public.user_matches m
+    join public.monitors monitor on monitor.id = m.monitor_id
+    join public.flight_offers offer on offer.id = m.offer_id
+    where m.id = p_match_id
+      and offer.price_pln is not null
+      and offer.price_pln <= coalesce((monitor.filters ->> 'budget_pln')::numeric, 0)
+  );
+$$;
+
 create or replace function public.can_read_flight_offer(p_offer_id uuid)
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (
@@ -170,7 +183,8 @@ returns boolean language sql stable security definer set search_path = public as
     where m.offer_id = p_offer_id
       and m.visible
       and public.is_active_user(m.user_id)
-      and (m.user_id = auth.uid() or public.is_admin())
+      and m.user_id = auth.uid()
+      and public.match_within_monitor_budget(m.id)
   );
 $$;
 
@@ -431,6 +445,7 @@ revoke execute on function public.validate_monitor_filters() from public, anon, 
 
 revoke execute on function public.is_admin() from public;
 revoke execute on function public.is_active_user(uuid) from public;
+revoke execute on function public.match_within_monitor_budget(uuid) from public;
 revoke execute on function public.can_read_flight_offer(uuid) from public;
 revoke execute on function public.claim_invite(text) from public;
 revoke execute on function public.create_invite(text, text) from public;
@@ -439,6 +454,7 @@ revoke execute on function public.admin_delete_profile(uuid) from public;
 revoke execute on function public.sync_telegram_connection(text, text) from public;
 revoke execute on function public.is_admin() from anon;
 revoke execute on function public.is_active_user(uuid) from anon;
+revoke execute on function public.match_within_monitor_budget(uuid) from anon;
 revoke execute on function public.can_read_flight_offer(uuid) from anon;
 revoke execute on function public.claim_invite(text) from anon;
 revoke execute on function public.create_invite(text, text) from anon;
@@ -447,6 +463,7 @@ revoke execute on function public.admin_delete_profile(uuid) from anon;
 revoke execute on function public.sync_telegram_connection(text, text) from anon;
 grant execute on function public.is_admin() to authenticated;
 grant execute on function public.is_active_user(uuid) to authenticated;
+grant execute on function public.match_within_monitor_budget(uuid) to authenticated;
 grant execute on function public.can_read_flight_offer(uuid) to authenticated;
 grant execute on function public.claim_invite(text) to authenticated;
 grant execute on function public.create_invite(text, text) to authenticated;
@@ -468,16 +485,16 @@ alter table public.scan_runs enable row level security;
 alter table public.feedback enable row level security;
 
 create policy profiles_self_or_admin on public.profiles for select to authenticated using (id = auth.uid() or public.is_admin());
-create policy profiles_self_update on public.profiles for update to authenticated using (id = auth.uid() or public.is_admin());
+create policy profiles_self_update on public.profiles for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
 create policy profiles_admin_delete on public.profiles for delete to authenticated using (public.is_admin() and id <> auth.uid());
 
 create policy invites_admin_all on public.invites for all to authenticated using (public.is_admin()) with check (public.is_admin());
-create policy monitors_owner_all on public.monitors for all to authenticated using (public.is_active_user(user_id) and (user_id = auth.uid() or public.is_admin())) with check (public.is_active_user(user_id) and (user_id = auth.uid() or public.is_admin()));
+create policy monitors_owner_all on public.monitors for all to authenticated using (public.is_active_user(user_id) and user_id = auth.uid()) with check (public.is_active_user(user_id) and user_id = auth.uid());
 create policy offers_matched_owner_read on public.flight_offers for select to authenticated using (public.can_read_flight_offer(id));
-create policy matches_owner_read on public.user_matches for select to authenticated using (public.is_active_user(user_id) and (user_id = auth.uid() or public.is_admin()));
-create policy matches_owner_update on public.user_matches for update to authenticated using (public.is_active_user(user_id) and (user_id = auth.uid() or public.is_admin())) with check (public.is_active_user(user_id) and (user_id = auth.uid() or public.is_admin()));
-create policy connections_self_read on public.telegram_connections for select to authenticated using (public.is_active_user(user_id) and (user_id = auth.uid() or public.is_admin()));
-create policy connections_self_delete on public.telegram_connections for delete to authenticated using (public.is_active_user(user_id) and (user_id = auth.uid() or public.is_admin()));
+create policy matches_owner_read on public.user_matches for select to authenticated using (public.is_active_user(user_id) and user_id = auth.uid() and public.match_within_monitor_budget(id));
+create policy matches_owner_update on public.user_matches for update to authenticated using (public.is_active_user(user_id) and user_id = auth.uid() and public.match_within_monitor_budget(id)) with check (public.is_active_user(user_id) and user_id = auth.uid() and public.match_within_monitor_budget(id));
+create policy connections_self_read on public.telegram_connections for select to authenticated using (public.is_active_user(user_id) and user_id = auth.uid());
+create policy connections_self_delete on public.telegram_connections for delete to authenticated using (public.is_active_user(user_id) and user_id = auth.uid());
 create policy telegram_state_admin_read on public.telegram_state for select to authenticated using (public.is_admin());
 create policy scan_runs_admin_read on public.scan_runs for select to authenticated using (public.is_admin());
 create policy feedback_owner_all on public.feedback for all to authenticated using (public.is_active_user(user_id) and user_id = auth.uid()) with check (

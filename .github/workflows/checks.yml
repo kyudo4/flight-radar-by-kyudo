@@ -5,12 +5,18 @@ on:
     branches: [main]
     paths:
       - "scanner/**"
+      - "site/**"
+      - "supabase/**"
+      - "scripts/**"
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/**"
   pull_request:
     paths:
       - "scanner/**"
+      - "site/**"
+      - "supabase/**"
+      - "scripts/**"
       - "tests/**"
       - "requirements.txt"
       - ".github/workflows/**"

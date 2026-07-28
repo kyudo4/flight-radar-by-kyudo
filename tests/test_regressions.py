@@ -164,18 +164,30 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertTrue(scanner.quality({"duration_h": 12, "stops": 1}, filters))
         self.assertFalse(scanner.quality({"duration_h": 24.1, "stops": 1}, filters))
 
-    def test_budget_rejects_normal_offer_but_keeps_error_fare_exception(self):
+    def test_budget_is_a_hard_limit_even_for_error_fares(self):
         filters = {"budget_pln": 4500}
         self.assertTrue(scanner.budget_ok({"price_pln": 4500}, filters))
         self.assertFalse(scanner.budget_ok({"price_pln": 4501}, filters))
-        self.assertTrue(scanner.budget_ok({"price_pln": 12000, "tags": ["Error Fare"]}, filters))
-        self.assertTrue(scanner.budget_ok({"price_pln": 12000, "tags": ["Mistake Fare"]}, filters))
+        self.assertFalse(scanner.budget_ok({"price_pln": 12000, "tags": ["Error Fare"]}, filters))
+        self.assertFalse(scanner.budget_ok({"price_pln": 12000, "tags": ["Mistake Fare"]}, filters))
         self.assertFalse(scanner.budget_ok({"price_pln": None}, filters))
 
+    def test_telegram_never_sends_an_offer_above_budget(self):
+        match = {"id": "match-1", "stars": 5, "last_notified_price": None,
+                 "telegram_eligible": True, "new_airline": True}
+        offer = {"price_pln": 12000, "tags": ["Error Fare"]}
+        monitor = {"filters": {"budget_pln": 4500},
+                   "telegram_rules": {"min_stars": 3, "immediate_new_low": True}}
+        with patch.object(scanner, "telegram") as telegram:
+            self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
+        telegram.assert_not_called()
+
     def test_database_budget_guard_is_part_of_read_policy(self):
-        migration = (ROOT / "supabase" / "migrations" / "20260728_budget_guard.sql").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260728230000_personal_data_isolation.sql").read_text()
         self.assertIn("match_within_monitor_budget", migration)
         self.assertIn("offer.price_pln <= coalesce((monitor.filters ->> 'budget_pln')::numeric, 0)", migration)
+        self.assertNotIn("Error Fare", migration)
+        self.assertNotIn("Mistake Fare", migration)
         self.assertIn("matches_owner_read", migration)
         self.assertIn("public.match_within_monitor_budget(id)", migration)
         self.assertIn("public.match_within_monitor_budget(m.id)", migration)
@@ -351,6 +363,40 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_offer_search_includes_city_names(self):
         app = (ROOT / "site" / "app.js").read_text()
         self.assertIn('${offer.route || ""} ${routeName(offer.route)}', app)
+
+    def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn('from("monitors").select("*").eq("user_id", user.id)', app)
+        match_query = app[app.index('from("user_matches")'):app.index('if (matchError)')]
+        self.assertIn('.eq("user_id", user.id)', match_query)
+
+    def test_initial_auth_state_is_loaded_only_once(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn('if (event === "INITIAL_SESSION") return;', app)
+        self.assertLess(app.index("await client.auth.getSession()"), app.index("client.auth.onAuthStateChange"))
+
+    def test_final_database_policy_is_private_and_budget_guarded(self):
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260728230000_personal_data_isolation.sql").read_text()
+        for source in (schema, migration):
+            can_read = source[source.index("create or replace function public.can_read_flight_offer"):]
+            can_read = can_read[:can_read.index("$$;", can_read.index("as $$"))]
+            self.assertIn("m.user_id = auth.uid()", can_read)
+            self.assertIn("public.match_within_monitor_budget(m.id)", can_read)
+            self.assertNotIn("public.is_admin()", can_read)
+            self.assertIn("user_id = auth.uid()", source)
+        self.assertIn("match_within_monitor_budget", schema)
+        self.assertIn("drop policy if exists monitors_owner_all", migration)
+        self.assertIn("drop policy if exists profiles_self_update", migration)
+        self.assertIn("using (id = auth.uid())", migration)
+
+    def test_site_and_database_changes_are_tested_before_deploy(self):
+        checks = (ROOT / ".github" / "workflows" / "checks.yml").read_text()
+        pages = (ROOT / ".github" / "workflows" / "pages.yml").read_text()
+        for path in ('- "site/**"', '- "supabase/**"', '- "scripts/**"'):
+            self.assertIn(path, checks)
+        self.assertIn("Run pre-deploy verification", pages)
+        self.assertIn("python -m unittest discover -s tests -v", pages)
 
     def test_google_block_uses_circuit_breaker(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
