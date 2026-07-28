@@ -172,6 +172,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertTrue(scanner.budget_ok({"price_pln": 12000, "tags": ["Mistake Fare"]}, filters))
         self.assertFalse(scanner.budget_ok({"price_pln": None}, filters))
 
+    def test_database_budget_guard_is_part_of_read_policy(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260728_budget_guard.sql").read_text()
+        self.assertIn("match_within_monitor_budget", migration)
+        self.assertIn("offer.price_pln <= coalesce((monitor.filters ->> 'budget_pln')::numeric, 0)", migration)
+        self.assertIn("matches_owner_read", migration)
+        self.assertIn("public.match_within_monitor_budget(id)", migration)
+        self.assertIn("public.match_within_monitor_budget(m.id)", migration)
+        self.assertIn("create or replace function public.can_read_flight_offer", migration)
+        self.assertIn("using (public.can_read_flight_offer(id));", migration)
+
     def test_prices_accept_european_thousands_formats(self):
         self.assertEqual(gflights._parse_price_pln("5.173 PLN"), 5173)
         self.assertEqual(rss.price("1.000 EUR"), 4350)
