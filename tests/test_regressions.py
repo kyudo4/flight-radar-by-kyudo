@@ -217,6 +217,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("Content-Security-Policy", html)
         self.assertIn('name="referrer" content="no-referrer"', html)
 
+    def test_telegram_bootstrap_password_fits_bcrypt_limit(self):
+        source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
+        self.assertEqual(source.count("crypto.randomUUID().replaceAll('-', '')"), 2)
+        password_bytes = 32 * 2 + len("A9!")
+        self.assertEqual(password_bytes, 67)
+        self.assertLessEqual(password_bytes, 72)
+
     def test_github_actions_are_pinned_to_full_commit_hashes(self):
         import re
         workflows = "\n".join(path.read_text() for path in (ROOT / ".github" / "workflows").glob("*.yml"))

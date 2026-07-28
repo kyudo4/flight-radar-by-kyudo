@@ -41,7 +41,9 @@ Deno.serve(async (request) => {
     if (!telegramId) return json({ error: 'Telegram nie zwrócił identyfikatora użytkownika.' }, 400);
 
     const email = `telegram-${telegramId}@auth.flight-radar.invalid`;
-    const password = crypto.randomUUID() + crypto.randomUUID() + 'A9!';
+    const password = crypto.randomUUID().replaceAll('-', '')
+      + crypto.randomUUID().replaceAll('-', '')
+      + 'A9!';
     const metadata = {
       id: telegramId,
       sub: String(claims.sub ?? telegramId),
