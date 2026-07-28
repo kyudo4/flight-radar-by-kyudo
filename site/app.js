@@ -208,7 +208,7 @@
       offersHaveMore = matchRows.length === OFFER_PAGE_SIZE;
       show("loadMoreOffersButton", offersHaveMore);
       renderOffers();
-      const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: co 3 godziny</span><span>🔐 Wyniki tylko dla Ciebie</span>`;
+      const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: co 3 godziny</span>`;
     } finally {
       offersLoading = false;
       button.disabled = false;

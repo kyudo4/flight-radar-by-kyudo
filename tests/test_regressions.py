@@ -344,6 +344,10 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('document.execCommand("copy")', app)
         self.assertIn('aria-label="Link zaproszenia"', app)
 
+    def test_dashboard_does_not_show_redundant_private_results_badge(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertNotIn("Wyniki tylko dla Ciebie", app)
+
     def test_google_block_uses_circuit_breaker(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn("except gflights.BlockedError as exc:", source)
