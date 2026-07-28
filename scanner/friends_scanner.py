@@ -21,6 +21,7 @@ MAX_STANDARD = max(1, min(100, int(os.environ.get("MAX_STANDARD_QUERIES", "60"))
 MAX_FIRST = max(1, min(10, int(os.environ.get("MAX_FIRST_QUERIES", "4"))))
 MAX_AIRPORTS_PER_SIDE = 5
 SCAN_INTERVAL_HOURS = 3
+FORCE_SCAN = os.environ.get("FORCE_SCAN", "false").lower() == "true"
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))
 FETCH_RETRIES = 2
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
@@ -109,6 +110,19 @@ def sync_monitor_scan_items(monitor):
     missing = [x for x in desired if (x["origin"], x["destination"], x["travel_date"], x["cabin"]) not in existing_keys]
     if missing:
         api("POST", "monitor_scan_items", body=missing, params={"on_conflict": "monitor_id,origin,destination,travel_date,cabin"})
+
+
+def force_due_scan_items(monitors, now):
+    """Ręczny workflow omija oczekiwanie na poprzedni trzygodzinny cykl."""
+    monitor_ids = [monitor["id"] for monitor in monitors if monitor.get("id")]
+    if not monitor_ids:
+        return
+    stamp = now.isoformat() + "Z"
+    ids = ",".join(monitor_ids)
+    api("PATCH", "monitor_scan_items", body={"next_scan_at": stamp},
+        params={"monitor_id": "in.(%s)" % ids})
+    api("PATCH", "monitors", body={"next_scan_at": stamp},
+        params={"id": "in.(%s)" % ids})
 
 
 def fetch_due_scan_items(active_ids, now):
@@ -439,6 +453,9 @@ def main():
             sync_monitor_scan_items(monitor)
         except Exception as exc:
             log("Nie udało się odświeżyć kolejki monitora %s: %s" % (monitor["id"], str(exc)[:160]))
+    if FORCE_SCAN:
+        force_due_scan_items(active, now)
+        log("Ręczny start: wymuszono sprawdzenie kolejki aktywnych monitorów")
 
     all_due_items = fetch_due_scan_items([m["id"] for m in active], now)
     active_by_id = {m["id"]: m for m in active}

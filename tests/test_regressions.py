@@ -42,6 +42,23 @@ class FlightRadarRegressionTests(unittest.TestCase):
         }
         self.assertEqual(scanner.monitor_combinations(monitor), [])
 
+    def test_manual_scan_forces_existing_monitor_queue_due(self):
+        calls = []
+
+        def fake_api(method, path, body=None, params=None):
+            calls.append((method, path, body, params))
+            return []
+
+        with patch.object(scanner, "api", side_effect=fake_api):
+            scanner.force_due_scan_items(
+                [{"id": "monitor-a"}, {"id": "monitor-b"}],
+                datetime(2026, 9, 1, 12, 0, 0),
+            )
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][1], "monitor_scan_items")
+        self.assertEqual(calls[1][1], "monitors")
+        self.assertEqual(calls[0][2]["next_scan_at"], "2026-09-01T12:00:00Z")
+
     def test_scan_selection_rotates_between_monitors(self):
         due = []
         for monitor_id in ("a", "b", "c"):
