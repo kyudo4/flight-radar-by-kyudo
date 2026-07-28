@@ -261,6 +261,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('name="referrer" content="no-referrer"', html)
         self.assertIn('href="https://t.me/flight_radar_kyudo_bot"', html)
 
+    def test_frontend_loads_matches_and_offers_separately(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn('select("id, offer_id, stars, feedback, notified_at, updated_at")', app)
+        self.assertIn('from("flight_offers")', app)
+        self.assertIn('.in("id", offerIds)', app)
+        self.assertIn('flight_offers: byId.get(match.offer_id) || null', app)
+
     def test_admin_is_a_separate_role_gated_app_tab(self):
         html = (ROOT / "site" / "index.html").read_text()
         app_js = (ROOT / "site" / "app.js").read_text()

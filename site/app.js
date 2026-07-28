@@ -154,8 +154,29 @@
   async function deleteMonitor(id) { if (!confirm("Usunąć ten monitoring?")) return; try { const { error } = await client.from("monitors").delete().eq("id", id).eq("user_id", user.id); if (error) throw error; await Promise.all([loadMonitors(), loadOffers()]); } catch (error) { alert(`Nie udało się usunąć monitora: ${error.message || "błąd połączenia"}`); } }
 
   async function loadOffers() {
-    const { data, error } = await client.from("user_matches").select("id, stars, feedback, notified_at, updated_at, flight_offers(route,travel_date,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags)").eq("visible", true).order("updated_at", { ascending: false }).limit(40);
-    if (error) throw error; offers = data || []; renderOffers();
+    // Do not rely on PostgREST's nested relationship response here. Depending
+    // on the schema cache/RLS state it can return the match while leaving the
+    // related offer as null. Fetch the two tables explicitly and join in the
+    // browser using the guaranteed foreign key.
+    const { data: matches, error: matchError } = await client.from("user_matches")
+      .select("id, offer_id, stars, feedback, notified_at, updated_at")
+      .eq("visible", true)
+      .order("updated_at", { ascending: false })
+      .limit(40);
+    if (matchError) throw matchError;
+    const matchRows = matches || [];
+    const offerIds = [...new Set(matchRows.map(match => match.offer_id).filter(Boolean))];
+    let offerRows = [];
+    if (offerIds.length) {
+      const { data, error } = await client.from("flight_offers")
+        .select("id,route,origin,destination,travel_date,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags")
+        .in("id", offerIds);
+      if (error) throw error;
+      offerRows = data || [];
+    }
+    const byId = new Map(offerRows.map(offer => [offer.id, offer]));
+    offers = matchRows.map(match => ({ ...match, flight_offers: byId.get(match.offer_id) || null }));
+    renderOffers();
     const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: co 3 godziny</span><span>🔐 Wyniki tylko dla Ciebie</span>`;
   }
   function renderOffers() {
