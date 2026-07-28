@@ -33,7 +33,7 @@
   }
 
   async function loadApp() {
-    if (!user) { show("authView"); show("appView", false); show("signOutButton", false); return; }
+    if (!user) { show("authView"); show("appView", false); show("appTabs", false); show("signOutButton", false); return; }
     show("authView", false); show("appView"); show("signOutButton"); $("userBadge").textContent = user.user_metadata?.preferred_username ? `@${user.user_metadata.preferred_username}` : "Telegram";
     const { data, error } = await client.from("profiles").select("*").eq("id", user.id).single();
     if (error) throw error; profile = data;
@@ -42,7 +42,8 @@
       const claimed = await client.rpc("claim_invite", { invite_token: token });
       if (claimed.data) { history.replaceState({}, "", location.pathname); profile.status = "active"; }
     }
-    if (profile.status !== "active") { show("adminTab", false); show("adminPanel", false); showAppTab("radar"); renderBlocked(); return; }
+    if (profile.status !== "active") { show("appTabs", false); show("adminTab", false); show("adminPanel", false); showAppTab("radar"); renderBlocked(); return; }
+    show("appTabs");
     show("adminTab", profile.role === "admin");
     $("radarTab").onclick = () => showAppTab("radar");
     $("adminTab").onclick = () => showAppTab("admin");
