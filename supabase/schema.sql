@@ -274,7 +274,17 @@ begin
   if budget <= 0 or budget > 1000000 or duration <= 0 or duration > 24 or stops < 0 or stops > 9 then
     raise exception 'Nieprawidłowy limit czasu lub przesiadek';
   end if;
-  if coalesce(new.filters ->> 'cabin', '') not in ('BUSINESS', 'FIRST', 'PREMIUM_ECONOMY', 'ECONOMY') then
+  if new.filters ? 'cabins' then
+    if jsonb_typeof(new.filters -> 'cabins') <> 'array'
+       or jsonb_array_length(new.filters -> 'cabins') < 1
+       or jsonb_array_length(new.filters -> 'cabins') > 4
+       or exists (
+         select 1 from jsonb_array_elements_text(new.filters -> 'cabins') as x(value)
+         where x.value not in ('BUSINESS', 'FIRST', 'PREMIUM_ECONOMY', 'ECONOMY')
+       ) then
+      raise exception 'Monitor musi mieć od 1 do 4 prawidłowych klas lotu';
+    end if;
+  elsif coalesce(new.filters ->> 'cabin', '') not in ('BUSINESS', 'FIRST', 'PREMIUM_ECONOMY', 'ECONOMY') then
     raise exception 'Nieprawidłowa klasa lotu';
   end if;
   min_stars := coalesce((new.telegram_rules ->> 'min_stars')::integer, 4);

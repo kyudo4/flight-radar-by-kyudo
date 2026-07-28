@@ -79,14 +79,15 @@ def monitor_combinations(monitor):
     origins = sorted({x.upper() for x in f.get("origins", []) if x})
     destinations = sorted({x.upper() for x in f.get("destinations", []) if x})
     dates = date_range(f)
-    cabin = (f.get("cabin") or "BUSINESS").lower().replace("_", "-")
+    raw_cabins = f.get("cabins") if isinstance(f.get("cabins"), list) else [f.get("cabin") or "BUSINESS"]
+    cabins = sorted({str(value).lower().replace("_", "-") for value in raw_cabins if str(value).upper() in {"BUSINESS", "FIRST", "PREMIUM_ECONOMY", "ECONOMY"}})
     if (not origins or not destinations or not dates
             or len(origins) > MAX_AIRPORTS_PER_SIDE
             or len(destinations) > MAX_AIRPORTS_PER_SIDE):
         return []
     return [{"monitor_id": monitor["id"], "origin": origin, "destination": destination,
              "travel_date": day.isoformat(), "cabin": cabin}
-            for origin in origins for destination in destinations for day in dates]
+            for origin in origins for destination in destinations for day in dates for cabin in cabins]
 
 
 def task_from_item(item):

@@ -29,6 +29,19 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(len(items), 56)
         self.assertEqual(len({(x["origin"], x["destination"], x["travel_date"]) for x in items}), 56)
 
+    def test_monitor_materializes_each_selected_cabin(self):
+        monitor = {
+            "id": "monitor-multi-cabin",
+            "filters": {
+                "origins": ["POZ"], "destinations": ["BKK"],
+                "from": "2026-09-01", "to": "2026-09-01",
+                "cabins": ["BUSINESS", "FIRST"],
+            },
+        }
+        items = scanner.monitor_combinations(monitor)
+        self.assertEqual({item["cabin"] for item in items}, {"business", "first"})
+        self.assertEqual(len(items), 2)
+
     def test_monitor_rejects_more_than_five_airports_per_side(self):
         monitor = {
             "id": "monitor-too-wide",
@@ -263,6 +276,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('id="monitorsSection"', html)
         self.assertLess(html.index('id="alertsSection"'), html.index('id="monitorsSection"'))
         self.assertNotIn('Oferty dopasowane do Twoich zasad.', html)
+        self.assertIn('name="monitorCabin"', html)
+        self.assertIn('wybierz jedną lub więcej', html)
         self.assertIn('show("adminTab", profile.role === "admin")', app_js)
         self.assertIn('profile?.role === "admin"', app_js)
         self.assertIn('show("adminView", adminVisible)', app_js)
@@ -287,6 +302,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertTrue(policies)
         self.assertTrue(all(" to authenticated " in line for line in policies))
         self.assertIn("where x.value !~ '^[A-Z]{3}$'", schema)
+        self.assertIn("new.filters ? 'cabins'", schema)
+        self.assertIn("jsonb_array_length(new.filters -> 'cabins') > 4", schema)
 
 
 if __name__ == "__main__":

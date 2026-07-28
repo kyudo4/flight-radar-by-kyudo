@@ -20,6 +20,7 @@
   const dateTimeFmt = value => value ? new Date(value).toLocaleString("pl-PL", { dateStyle: "short", timeStyle: "short" }) : "jeszcze nie sprawdzono";
   const airportName = value => AIRPORTS[String(value || "").toUpperCase()] || String(value || "");
   const routeName = value => String(value || "").split(/\s*→\s*/).map(airportName).join(" → ");
+  const monitorCabins = filters => Array.isArray(filters?.cabins) && filters.cabins.length ? filters.cabins : (filters?.cabin ? [filters.cabin] : []);
 
   async function init() {
     $("themeButton").onclick = () => { document.body.classList.toggle("dark"); localStorage.setItem("afr-theme", document.body.classList.contains("dark") ? "dark" : "light"); };
@@ -92,10 +93,12 @@
 
   function renderMonitor(m) {
     const f = m.filters || {}, r = m.telegram_rules || {};
+    const cabins = monitorCabins(f);
+    const cabinLabel = cabins.map(cabin => CABINS[cabin] || cabin).join(", ");
     const route = `${(f.origins || []).map(airportName).join(", ")} → ${(f.destinations || []).map(airportName).join(", ")}`;
     const nextScan = m.status === "active" ? `Następny skan: ${dateTimeFmt(m.next_scan_at)}` : "Skan wstrzymany";
     const airlineRules = [(f.preferred_airlines || []).length ? `Preferowane: ${(f.preferred_airlines || []).join(", ")}` : "", (f.excluded_airlines || []).length ? `Wykluczone: ${(f.excluded_airlines || []).join(", ")}` : ""].filter(Boolean).join(" · ");
-    return `<article class="monitor-card"><div><h3>${esc(m.name)}</h3><div class="card-meta">${esc(route)} · ${esc(CABINS[f.cabin] || f.cabin || "—")} · ${dateFmt(f.from)}–${dateFmt(f.to)}</div></div><div class="card-meta">Do ${esc(f.budget_pln ?? "—")} PLN · maks. ${esc(f.max_duration_h ?? "—")}h · Telegram od ${esc(r.min_stars ?? "—")}⭐</div>${airlineRules ? `<div class="card-meta">${esc(airlineRules)}</div>` : ""}<div class="card-meta">Ostatni skan: ${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
+    return `<article class="monitor-card"><div><h3>${esc(m.name)}</h3><div class="card-meta">${esc(route)} · ${esc(cabinLabel || "—")} · ${dateFmt(f.from)}–${dateFmt(f.to)}</div></div><div class="card-meta">Do ${esc(f.budget_pln ?? "—")} PLN · maks. ${esc(f.max_duration_h ?? "—")}h · Telegram od ${esc(r.min_stars ?? "—")}⭐</div>${airlineRules ? `<div class="card-meta">${esc(airlineRules)}</div>` : ""}<div class="card-meta">Ostatni skan: ${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
   }
 
   function openMonitorDialog(monitor = null) {
@@ -106,7 +109,7 @@
     $("monitorName").value = monitor?.name || "";
     $("monitorOrigins").value = (f.origins || []).join(", "); $("monitorDestinations").value = (f.destinations || []).join(", ");
     $("monitorFrom").value = f.from || ""; $("monitorTo").value = f.to || "";
-    $("monitorCabin").value = f.cabin || ""; $("monitorBudget").value = f.budget_pln || "";
+    const selectedCabins = monitorCabins(f); document.querySelectorAll("input[name='monitorCabin']").forEach(input => { input.checked = selectedCabins.includes(input.value); }); $("monitorBudget").value = f.budget_pln || "";
     $("monitorDuration").value = f.max_duration_h || ""; $("monitorStops").value = Number.isInteger(f.max_stops) ? f.max_stops : "";
     $("monitorPreferredAirlines").value = (f.preferred_airlines || []).join(", ");
     $("monitorExcludedAirlines").value = (f.excluded_airlines || []).join(", "); $("monitorDirectOnly").checked = Boolean(f.direct_only);
@@ -119,7 +122,7 @@
     const name = $("monitorName").value.trim();
     const origins = csv($("monitorOrigins").value), destinations = csv($("monitorDestinations").value);
     const from = $("monitorFrom").value, to = $("monitorTo").value;
-    const cabin = $("monitorCabin").value, budgetRaw = $("monitorBudget").value.trim(), durationRaw = $("monitorDuration").value.trim(), stopsRaw = $("monitorStops").value.trim();
+    const cabins = [...document.querySelectorAll("input[name='monitorCabin']:checked")].map(input => input.value), budgetRaw = $("monitorBudget").value.trim(), durationRaw = $("monitorDuration").value.trim(), stopsRaw = $("monitorStops").value.trim();
     const starsRaw = $("telegramStars").value, dropRaw = $("telegramDrop").value.trim();
     const budget = Number(budgetRaw), maxDuration = Number(durationRaw), maxStops = Number(stopsRaw), telegramStars = Number(starsRaw), telegramDrop = Number(dropRaw);
     const validIata = values => values.length > 0 && values.every(value => /^[A-Z]{3}$/.test(value));
@@ -127,10 +130,10 @@
     if (!validIata(origins) || !validIata(destinations) || origins.length > 5 || destinations.length > 5) { $("formMessage").textContent = "Wpisz od 1 do 5 lotnisk wylotu i maksymalnie 5 celów jako trzyznakowe kody IATA."; return; }
     const days = from && to ? Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1 : 0;
     if (!from || !to || from > to || days > 32) { $("formMessage").textContent = "Zakres dat jest nieprawidłowy (maksymalnie 32 dni)."; return; }
-    if (!cabin || !budgetRaw || !durationRaw || !stopsRaw || !starsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || !Number.isFinite(maxDuration) || maxDuration <= 0 || maxDuration > 24 || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isInteger(telegramStars) || telegramStars < 3 || telegramStars > 5 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Uzupełnij wszystkie wymagane kryteria. Czas może wynosić maksymalnie 24 h, a przesiadki 0–9."; return; }
+    if (!cabins.length || cabins.length > 4 || !budgetRaw || !durationRaw || !stopsRaw || !starsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || !Number.isFinite(maxDuration) || maxDuration <= 0 || maxDuration > 24 || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isInteger(telegramStars) || telegramStars < 3 || telegramStars > 5 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Wybierz co najmniej jedną klasę i uzupełnij wszystkie wymagane kryteria. Czas może wynosić maksymalnie 24 h, a przesiadki 0–9."; return; }
     const excludedAirlines = csv($("monitorExcludedAirlines").value);
     const preferredAirlines = csv($("monitorPreferredAirlines").value);
-    const f = { origins, destinations, from, to, cabin, budget_pln: budget, max_duration_h: maxDuration, max_stops: maxStops, preferred_airlines: preferredAirlines, direct_only: $("monitorDirectOnly").checked, excluded_airlines: excludedAirlines };
+    const f = { origins, destinations, from, to, cabins, cabin: cabins[0], budget_pln: budget, max_duration_h: maxDuration, max_stops: maxStops, preferred_airlines: preferredAirlines, direct_only: $("monitorDirectOnly").checked, excluded_airlines: excludedAirlines };
     const r = { min_stars: telegramStars, drop_percent: telegramDrop, immediate_new_low: $("telegramImmediate").checked };
     const payload = { name, filters: f, app_rules: { min_stars: 1 }, telegram_rules: r, expires_at: f.to || null };
     let result;

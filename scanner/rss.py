@@ -199,7 +199,8 @@ def candidates(monitors):
             stops = stops_count(text)
             for monitor in monitors:
                 filters = monitor.get("filters") or {}
-                if cabin != filters.get("cabin", cabin):
+                allowed_cabins = filters.get("cabins") if isinstance(filters.get("cabins"), list) else [filters.get("cabin", cabin)]
+                if cabin not in {str(value).upper() for value in allowed_cabins}:
                     continue
                 if not set(origins) & set(filters.get("origins", [])) or not set(destinations) & set(filters.get("destinations", [])):
                     continue

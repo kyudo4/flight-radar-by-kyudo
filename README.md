@@ -59,6 +59,8 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   użytkownik nie zapisze własnych filtrów.
 - pojedynczy monitoring przyjmuje maksymalnie 5 lotnisk wylotu i 5 celów; limit jest
   sprawdzany w panelu, bazie oraz skanerze.
+- jeden monitoring może obejmować kilka klas jednocześnie, np. Business i First;
+  każda klasa dostaje osobne zadania skanera.
 
 ## Zasady bezpieczeństwa
 
