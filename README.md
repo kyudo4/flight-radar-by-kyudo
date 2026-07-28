@@ -21,7 +21,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
 ## Uruchomienie
 
 1. Utwórz projekt Supabase i wykonaj `supabase/schema.sql`. Jeśli baza już działała
-   na wcześniejszej wersji, wykonaj dodatkowo `supabase/migrations/20260728_hardening.sql`.
+   na wcześniejszej wersji, wykonaj dodatkowo migracje z katalogu `supabase/migrations/`
+   w kolejności dat, w tym `20260728_offer_read_policy.sql`.
 2. W BotFather > Bot Settings > Web Login dodaj domenę panelu jako Allowed Origin
    i pozostaw Client ID/Secret dla tego samego bota.
 3. W Supabase Edge Functions utwórz funkcję `telegram-auth` z pliku
