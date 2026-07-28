@@ -230,6 +230,17 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("Content-Security-Policy", html)
         self.assertIn('name="referrer" content="no-referrer"', html)
 
+    def test_admin_is_a_separate_role_gated_app_tab(self):
+        html = (ROOT / "site" / "index.html").read_text()
+        app_js = (ROOT / "site" / "app.js").read_text()
+        self.assertIn('id="radarTab"', html)
+        self.assertIn('id="adminTab"', html)
+        self.assertIn('id="radarView"', html)
+        self.assertIn('id="adminPanel"', html)
+        self.assertIn('show("adminTab", profile.role === "admin")', app_js)
+        self.assertIn('profile?.role === "admin"', app_js)
+        self.assertIn('show("adminPanel", adminVisible)', app_js)
+
     def test_telegram_bootstrap_password_fits_bcrypt_limit(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
         self.assertEqual(source.count("crypto.randomUUID().replaceAll('-', '')"), 2)

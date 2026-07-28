@@ -42,10 +42,14 @@
       const claimed = await client.rpc("claim_invite", { invite_token: token });
       if (claimed.data) { history.replaceState({}, "", location.pathname); profile.status = "active"; }
     }
-    if (profile.status !== "active") { renderBlocked(); return; }
+    if (profile.status !== "active") { show("adminTab", false); show("adminPanel", false); showAppTab("radar"); renderBlocked(); return; }
+    show("adminTab", profile.role === "admin");
+    $("radarTab").onclick = () => showAppTab("radar");
+    $("adminTab").onclick = () => showAppTab("admin");
+    showAppTab("radar");
     await syncTelegramConnection();
     await Promise.all([loadMonitors(), loadOffers()]);
-    if (profile.role === "admin") { show("adminPanel"); await loadAdmin(); }
+    if (profile.role === "admin") await loadAdmin();
     $("newMonitorButton").onclick = () => openMonitorDialog();
     $("closeDialog").onclick = $("cancelDialog").onclick = () => $("monitorDialog").close();
     $("monitorForm").onsubmit = saveMonitor;
@@ -57,6 +61,14 @@
     const suspended = profile?.status === "suspended";
     $("statusStrip").innerHTML = `<strong>${suspended ? "⛔ Konto zawieszone" : "⏳ Konto oczekuje na aktywację"}</strong><span>${suspended ? "Skontaktuj się z administratorem." : "Poproś administratora o zaproszenie lub sprawdź, czy użyłeś właściwego linku."}</span>`;
     $("monitorList").innerHTML = `<div class="empty">${suspended ? "Dostęp do aplikacji jest obecnie wyłączony." : "Konto nie jest jeszcze aktywne."}</div>`; $("offerList").innerHTML = "";
+  }
+
+  function showAppTab(tab) {
+    const adminVisible = tab === "admin" && profile?.role === "admin";
+    show("radarView", !adminVisible);
+    show("adminPanel", adminVisible);
+    $("radarTab").classList.toggle("active", !adminVisible);
+    $("adminTab").classList.toggle("active", adminVisible);
   }
 
   async function loadMonitors() {
