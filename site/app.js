@@ -156,7 +156,7 @@
   async function signInWithTelegram() {
     const provider = cfg.telegramAuthProvider || "custom:telegram";
     const redirectTo = location.origin + location.pathname + location.search;
-    const { error } = await client.auth.signInWithOAuth({ provider, options: { redirectTo } });
+    const { error } = await client.auth.signInWithOAuth({ provider, options: { redirectTo, queryParams: { origin: location.origin } } });
     if (error) message(`Nie udało się uruchomić logowania Telegram: ${error.message}`);
   }
   async function syncTelegramConnection() {
