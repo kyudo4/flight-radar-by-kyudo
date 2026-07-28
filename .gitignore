@@ -1,0 +1,8 @@
+site/config.js
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+state/
+node_modules/

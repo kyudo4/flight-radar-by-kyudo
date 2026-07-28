@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Asia Flight Radar — Friends</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./"><span class="brand-mark">✈</span><span>Asia Flight Radar <small>Friends</small></span></a>
+    <div class="top-actions"><span id="userBadge" class="muted"></span><button id="themeButton" class="icon-button" title="Zmień motyw">☼</button><button id="signOutButton" class="secondary hidden">Wyloguj</button></div>
+  </header>
+
+  <main>
+    <section id="setupView" class="panel setup hidden">
+      <div class="eyebrow">Konfiguracja projektu</div>
+      <h1>Podłącz prywatną bazę Friends</h1>
+      <p>Panel jest gotowy, ale brakuje publicznego adresu Supabase. Skopiuj <code>config.example.js</code> do <code>config.js</code> i wpisz dane projektu.</p>
+      <div class="setup-grid"><span>1</span><p>Wykonaj <code>supabase/schema.sql</code>.</p><span>2</span><p>Utwórz <code>site/config.js</code> na podstawie przykładu.</p><span>3</span><p>Odśwież stronę i zaproś pierwszych znajomych.</p></div>
+    </section>
+
+    <section id="authView" class="panel auth hidden">
+      <div class="eyebrow">Zamknięta beta · maks. 10 osób</div>
+      <h1>Twój osobisty radar okazji</h1>
+      <p class="lead">Zaloguj się, aby zobaczyć własne monitory i prywatne alerty Telegram.</p>
+      <form id="loginForm" class="login-form"><label>E-mail<input id="loginEmail" type="email" required placeholder="ty@example.com"></label><button class="primary">Wyślij link logowania</button></form>
+      <p id="authMessage" class="message"></p>
+    </section>
+
+    <section id="appView" class="hidden">
+      <div class="hero-row"><div><div class="eyebrow">Twój radar</div><h1>Oferty dopasowane do Twoich zasad.</h1><p class="lead">Wyniki są prywatne. Telegram ma osobne, ostrzejsze reguły niż panel.</p></div><div class="hero-actions"><button id="connectTelegramButton" class="secondary">Połącz Telegram</button><button id="newMonitorButton" class="primary">+ Nowy monitoring</button></div></div>
+      <div id="statusStrip" class="status-strip"></div>
+      <div class="content-grid"><section><div class="section-heading"><h2>Moje monitory</h2><span id="monitorCount" class="pill"></span></div><div id="monitorList" class="monitor-list"></div></section><aside><div class="section-heading"><h2>Moje alerty</h2><button id="refreshButton" class="link-button">Odśwież</button></div><div id="offerList" class="offer-list"></div></aside></div>
+      <section id="adminPanel" class="panel admin hidden"><div class="section-heading"><div><div class="eyebrow">Tylko dla Ciebie</div><h2>Panel administratora</h2></div><span id="seatCount" class="pill"></span></div><div class="admin-actions"><button id="inviteButton" class="secondary">Utwórz zaproszenie</button><span id="inviteOutput" class="message"></span></div><div id="userList" class="user-list"></div></section>
+    </section>
+  </main>
+
+  <dialog id="monitorDialog"><form id="monitorForm" method="dialog"><div class="dialog-head"><div><div class="eyebrow">Nowy monitor</div><h2>Ustaw własne kryteria</h2></div><button type="button" class="icon-button" id="closeDialog">×</button></div><label>Nazwa<input id="monitorName" required value="Mój monitor premium"></label><div class="form-grid"><label>Wylot<input id="monitorOrigins" required placeholder="WAW, POZ, VIE"></label><label>Cel<input id="monitorDestinations" required placeholder="BKK, SIN, HND"></label><label>Od<input id="monitorFrom" type="date" required value="2026-09-01"></label><label>Do<input id="monitorTo" type="date" required value="2026-09-14"></label><label>Klasa<select id="monitorCabin"><option value="BUSINESS">Business</option><option value="FIRST">First</option><option value="PREMIUM_ECONOMY">Premium Economy</option><option value="ECONOMY">Economy</option></select></label><label>Budżet PLN<input id="monitorBudget" type="number" min="1" value="6000"></label><label>Maks. czas (h)<input id="monitorDuration" type="number" min="1" value="24"></label><label>Maks. przesiadek<input id="monitorStops" type="number" min="0" value="2"></label></div><div class="rules-card"><h3>Telegram — osobne zasady</h3><div class="form-grid"><label>Minimalna ocena<select id="telegramStars"><option value="5">⭐⭐⭐⭐⭐</option><option value="4" selected>⭐⭐⭐⭐</option><option value="3">⭐⭐⭐</option></select></label><label>Próg ponowienia %<input id="telegramDrop" type="number" min="1" max="50" value="10"></label></div><label class="check"><input id="telegramImmediate" type="checkbox" checked> Wysyłaj natychmiast, gdy oferta jest nową najniższą ceną</label></div><div class="dialog-actions"><button type="button" class="secondary" id="cancelDialog">Anuluj</button><button class="primary">Zapisz monitoring</button></div><p id="formMessage" class="message"></p></form></dialog>
+  <script src="config.js"></script><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="app.js"></script>
+</body>
+</html>
