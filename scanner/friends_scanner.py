@@ -3,6 +3,7 @@
 import hashlib
 import html
 import json
+import math
 import os
 import time
 import urllib.error
@@ -409,7 +410,57 @@ def budget_ok(flight, filters):
     return float(price) <= budget
 
 
-def score(flight, filters, feedback=None):
+def preference_adjustment(flight, filters, preferences=None, route="", destination="", cabin=""):
+    """Translate durable cross-monitor preference signals into a star adjustment."""
+    if preferences is None:
+        return 0
+    airline = airline_identity(flight)
+    durations = [flight.get("duration_h"), flight.get("outbound_duration_h"), flight.get("return_duration_h")]
+    known_durations = [float(value) for value in durations if value is not None and float(value) > 0]
+    duration_bucket = int(math.ceil(max(known_durations) / 2) * 2) if known_durations else None
+    budget = float(filters.get("budget_pln") or 0)
+    price = float(flight.get("price_pln") or 0)
+    price_bucket = max(10, min(200, int(math.ceil((price / budget) * 10) * 10))) if budget > 0 and price > 0 else None
+    total = 0
+    for signal in preferences:
+        signal_cabin = str(signal.get("cabin") or "*").upper().replace("-", "_")
+        if signal_cabin not in {"*", str(cabin or "").upper().replace("-", "_")}:
+            continue
+        dimension = str(signal.get("dimension") or "")
+        value = str(signal.get("value") or "")
+        signal_score = int(signal.get("score") or 0)
+        if dimension == "airline" and value == airline:
+            total += signal_score
+        elif dimension == "route" and value == route:
+            total += signal_score
+        elif dimension == "destination" and value.upper() == str(destination or "").upper():
+            total += signal_score
+        elif dimension == "duration" and duration_bucket is not None:
+            try:
+                learned_bucket = int(value)
+            except ValueError:
+                continue
+            if (signal_score < 0 and duration_bucket >= learned_bucket) or (signal_score > 0 and abs(duration_bucket - learned_bucket) <= 2):
+                total += signal_score
+        elif dimension == "price" and price_bucket is not None:
+            try:
+                learned_bucket = int(value)
+            except ValueError:
+                continue
+            if (signal_score < 0 and price_bucket >= learned_bucket) or (signal_score > 0 and price_bucket <= learned_bucket):
+                total += signal_score
+    if total >= 6:
+        return 2
+    if total >= 2:
+        return 1
+    if total <= -6:
+        return -2
+    if total <= -2:
+        return -1
+    return 0
+
+
+def score(flight, filters, feedback=None, preferences=None, route="", destination="", cabin=""):
     price = flight.get("price_pln") or 999999
     budget = int(filters.get("budget_pln") or 999999)
     stars = 5 if price <= budget * .55 else 4 if price <= budget * .75 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
@@ -425,6 +476,9 @@ def score(flight, filters, feedback=None):
     for verdict in feedback or []:
         if verdict == "buy": stars = min(5, stars + 1)
         elif verdict in {"expensive", "toolong", "skip", "badairline"}: stars = max(1, stars - 1)
+    stars = max(1, min(5, stars + preference_adjustment(
+        flight, filters, preferences, route=route, destination=destination, cabin=cabin
+    )))
     return stars
 
 
@@ -434,6 +488,19 @@ def fetch_existing(monitor_id):
         "select": "id,offer_id,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln)",
         "order": "updated_at.asc,id.asc",
     })
+
+
+def fetch_preferences(user_id):
+    """Return durable feedback signals, or None for a pre-migration database."""
+    try:
+        return fetch_all_rows("user_preference_signals", {
+            "user_id": "eq." + user_id,
+            "select": "dimension,value,cabin,score",
+            "order": "updated_at.desc,dimension.asc,value.asc",
+        })
+    except Exception as exc:
+        log("Nie udało się odczytać trwałych preferencji: %s" % str(exc)[:120])
+        return None
 
 
 def save_offer(task, flight):
@@ -565,7 +632,7 @@ def send_due_alert(match, offer, monitor, connection):
     return True
 
 
-def process_candidate(monitor, task, flight, previous=None):
+def process_candidate(monitor, task, flight, previous=None, preferences=None):
     filters = monitor.get("filters") or {}
     if not quality(flight, filters) or not budget_ok(flight, filters):
         return 0, 0
@@ -600,7 +667,12 @@ def process_candidate(monitor, task, flight, previous=None):
     current_price = flight.get("price_pln")
     previous_min = min(previous_prices) if previous_prices else None
     prices = previous_prices + ([current_price] if current_price is not None else [])
-    stars = score(flight, filters, matching_feedback)
+    stars = score(
+        flight, filters,
+        matching_feedback if preferences is None else None,
+        preferences=preferences, route=route,
+        destination=task["dest"], cabin=cabin,
+    )
     rules = monitor.get("telegram_rules") or {}
     is_new_low = bool(current_price is not None and (previous_min is None or current_price < previous_min))
     is_new_airline = bool(airline and airline not in route_airlines)
@@ -702,6 +774,7 @@ def main():
     executed_count = 0
     source_errors_in_row = 0
     history_cache = {}
+    preference_cache = {}
     try:
         for task in tasks:
             executed_count += 1
@@ -734,7 +807,13 @@ def main():
                         try:
                             if monitor["id"] not in history_cache:
                                 history_cache[monitor["id"]] = fetch_existing(monitor["id"])
-                            added, sent = process_candidate(monitor, task, flight, history_cache[monitor["id"]])
+                            user_id = monitor["user_id"]
+                            if user_id not in preference_cache:
+                                preference_cache[user_id] = fetch_preferences(user_id)
+                            added, sent = process_candidate(
+                                monitor, task, flight, history_cache[monitor["id"]],
+                                preference_cache[user_id],
+                            )
                             offers_count += added; sent_count += sent
                         except Exception as exc:
                             task_errors.append("%s-%s-%s/%s: %s" % (task["origin"], task["dest"], task["date"], monitor["id"], str(exc)[:120]))
@@ -764,7 +843,13 @@ def main():
             try:
                 if monitor["id"] not in history_cache:
                     history_cache[monitor["id"]] = fetch_existing(monitor["id"])
-                added, sent = process_candidate(monitor, task, flight, history_cache[monitor["id"]])
+                user_id = monitor["user_id"]
+                if user_id not in preference_cache:
+                    preference_cache[user_id] = fetch_preferences(user_id)
+                added, sent = process_candidate(
+                    monitor, task, flight, history_cache[monitor["id"]],
+                    preference_cache[user_id],
+                )
                 offers_count += added; sent_count += sent
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))

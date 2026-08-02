@@ -316,6 +316,39 @@ class FlightRadarRegressionTests(unittest.TestCase):
         preferred = scanner.score(flight, {"budget_pln": 6000, "preferred_airlines": ["Singapore Airlines"]})
         self.assertEqual(preferred, min(5, base + 1))
 
+    def test_durable_bad_airline_signal_applies_across_monitors_and_dates(self):
+        flight = {"airline": "CA", "airline_name": "Air China", "price_pln": 5000, "duration_h": 14, "stops": 1}
+        filters = {"budget_pln": 6000}
+        preferences = [{"dimension": "airline", "value": "CA", "cabin": "BUSINESS", "score": -3}]
+        base = scanner.score(flight, filters)
+        learned = scanner.score(
+            flight, filters, preferences=preferences,
+            route="WAW → NRT", destination="NRT", cabin="BUSINESS",
+        )
+        self.assertEqual(learned, max(1, base - 1))
+
+    def test_durable_duration_and_price_signals_generalize_safely(self):
+        preferences = [
+            {"dimension": "duration", "value": "18", "cabin": "ECONOMY", "score": -3},
+            {"dimension": "price", "value": "90", "cabin": "ECONOMY", "score": -3},
+        ]
+        slow_expensive = {"airline": "LO", "price_pln": 4500, "duration_h": 19, "stops": 1}
+        fast_cheaper = {"airline": "LO", "price_pln": 3500, "duration_h": 14, "stops": 1}
+        filters = {"budget_pln": 5000}
+        self.assertEqual(scanner.preference_adjustment(
+            slow_expensive, filters, preferences, cabin="ECONOMY"
+        ), -2)
+        self.assertEqual(scanner.preference_adjustment(
+            fast_cheaper, filters, preferences, cabin="ECONOMY"
+        ), 0)
+
+    def test_durable_preferences_do_not_leak_between_cabins(self):
+        flight = {"airline": "CA", "price_pln": 4000, "duration_h": 14, "stops": 1}
+        preferences = [{"dimension": "airline", "value": "CA", "cabin": "BUSINESS", "score": -9}]
+        self.assertEqual(scanner.preference_adjustment(
+            flight, {"budget_pln": 5000}, preferences, cabin="ECONOMY"
+        ), 0)
+
     def test_preferred_airline_is_kept_even_when_not_top_three(self):
         flights = [
             {"airline": "CA", "airline_name": "Air China", "price_pln": 3000, "duration_h": 14, "stops": 1},
@@ -755,6 +788,17 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("match.feedback is null", migration)
         self.assertIn("saved_feedback.match_id = match.id", migration)
         self.assertIn("'matches_deleted', matches_deleted", migration)
+
+    def test_feedback_is_aggregated_into_a_durable_cross_monitor_profile(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260802000600_durable_preferences.sql").read_text()
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn("create table if not exists public.user_preference_signals", migration)
+        self.assertIn("capture_feedback_preference", migration)
+        self.assertIn("Existing reactions become part of the durable profile", migration)
+        self.assertIn("preference_signals_owner_read", migration)
+        self.assertIn("Detailed past results are disposable", migration)
+        self.assertIn("offer.travel_date < current_date - 7", migration)
+        self.assertIn('fetch_all_rows("user_preference_signals"', scanner_source)
 
     def test_frontend_and_scanner_have_legacy_database_fallbacks(self):
         app = (ROOT / "site" / "app.js").read_text()
