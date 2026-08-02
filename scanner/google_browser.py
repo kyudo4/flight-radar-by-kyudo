@@ -45,17 +45,19 @@ def parse_card_label(label):
     """
     text = " ".join(str(label or "").split())
     price_match = re.search(
-        r"(?:From\s+)?([0-9][0-9 ,.\u00a0]*)\s+(?:Polish zlotys|PLN)\b",
+        r"(?:From\s+)?([0-9][0-9 ,.\u00a0]*)\s+(?:Polish\s+zlotys?|PLN|zł)(?:\b|$)",
         text,
         re.I,
     )
     duration_match = re.search(
-        r"Total duration\s+(?:(\d+)\s*hr)?(?:\s*(\d+)\s*min)?\.",
+        r"Total duration\s+(?:(\d+)\s*(?:hours|hour|hrs|hr))?"
+        r"(?:\s*(\d+)\s*(?:minutes|minute|mins|min))?",
         text,
         re.I,
     )
     airline_match = re.search(
-        r"(?:Nonstop|\d+\s+stops?) flight with (.+?)\.\s+(?:Operated by .+?\.\s+)?Leaves ",
+        r"(?:Nonstop|\d+\s+stops?) flight (?:with|on) (.+?)"
+        r"(?:\.\s+(?:Operated by .+?\.\s+)?Leaves\b|\s+Leaves\b)",
         text,
         re.I,
     )
@@ -86,6 +88,49 @@ def parse_card_label(label):
         "aircraft": "",
         "_label": text,
     }
+
+
+def _card_labels(page):
+    """Collect accessible flight-card labels across Google's changing DOM.
+
+    Google has alternated between links, buttons and plain elements carrying
+    ``aria-label``.  Restricting the fallback to ``Select flight`` links made
+    otherwise valid searches look empty after a harmless UI rollout.
+    """
+    selectors = (
+        '[aria-label*="Select flight"]',
+        '[aria-label*="Choose flight"]',
+        '[aria-label*="Total duration"][aria-label*="flight with"]',
+        '[aria-label*="Total duration"][aria-label*="Polish zlotys"]',
+        '[aria-label*="Total duration"][aria-label*="PLN"]',
+    )
+    labels = []
+    seen = set()
+
+    def add(locator):
+        count = min(locator.count(), 120)
+        for index in range(count):
+            label = locator.nth(index).get_attribute("aria-label") or ""
+            if label and label not in seen:
+                seen.add(label)
+                labels.append(label)
+
+    # Keep the original semantic query first: it is the safest selector and
+    # is also used by the round-trip picker below.
+    links = page.get_by_role("link", name=re.compile(r"(?:Select|Choose) flight", re.I))
+    if links.count():
+        links.first.wait_for(timeout=25000)
+        add(links)
+
+    # Newer Google layouts expose the same cards as buttons or aria-labelled
+    # containers.  These selectors are intentionally narrow enough not to
+    # parse unrelated navigation labels.
+    for selector in selectors:
+        try:
+            add(page.locator(selector))
+        except Exception:
+            continue
+    return labels
 
 
 def _close():
@@ -156,12 +201,9 @@ def _load_cards(page, url, returning=False):
                 page.get_by_role("heading", name=heading, exact=True).wait_for(timeout=25000)
             except Exception:
                 pass
-            links = page.get_by_role("link", name=re.compile(r"Select flight", re.I))
-            links.first.wait_for(timeout=25000)
             cards = []
             seen = set()
-            for index in range(min(links.count(), 120)):
-                label = links.nth(index).get_attribute("aria-label") or ""
+            for label in _card_labels(page):
                 if not label or label in seen:
                     continue
                 seen.add(label)

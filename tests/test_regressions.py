@@ -97,6 +97,46 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(card["airline_name"], "KLM and Air France")
         self.assertIn("6:05 AM", card["departure"])
 
+    def test_rendered_google_card_parser_accepts_changed_units_and_currency(self):
+        label = (
+            "From 4 950 PLN round trip total. 1 stop flight on Qatar Airways. "
+            "Leaves Warsaw Airport at 10:00 AM and arrives at Bangkok Airport at "
+            "8:00 AM. Total duration 14 hours 5 minutes."
+        )
+        card = google_browser.parse_card_label(label)
+        self.assertEqual(card["price_pln"], 4950)
+        self.assertEqual(card["stops"], 1)
+        self.assertAlmostEqual(card["duration_h"], 14 + 5 / 60, places=2)
+
+    def test_rendered_fallback_accepts_aria_label_cards_without_select_link(self):
+        label = (
+            "From 4,500 PLN. 1 stop flight with Qatar Airways. "
+            "Leaves Warsaw Airport at 10:00 AM and arrives at Bangkok Airport at "
+            "8:00 AM. Total duration 14 hours."
+        )
+
+        class EmptyLinks:
+            def count(self): return 0
+
+        class AccessibleCards:
+            def count(self): return 1
+            def nth(self, _): return self
+            def get_attribute(self, _): return label
+
+        class FakePage:
+            def goto(self, *args, **kwargs): pass
+            def get_by_role(self, role, **kwargs):
+                if role == "heading":
+                    return type("Heading", (), {"wait_for": lambda self, timeout=None: None})()
+                return EmptyLinks()
+            def locator(self, selector):
+                return AccessibleCards() if "Total duration" in selector else EmptyLinks()
+            def wait_for_timeout(self, _): pass
+
+        cards = google_browser._load_cards(FakePage(), "https://google.test")
+        self.assertEqual(cards[0]["price_pln"], 4500)
+        self.assertEqual(cards[0]["airline_name"], "Qatar Airways")
+
     def test_rendered_fallback_retries_a_transient_empty_page(self):
         class FakeFirst:
             def __init__(self, parent): self.parent = parent
@@ -878,6 +918,19 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("cleanup_retention", migration)
         self.assertIn("python scanner/cleanup.py", workflow)
         self.assertIn("rpc/cleanup_retention", cleanup)
+
+    def test_stale_offer_cleanup_skips_legacy_schema_without_repeating_http_400(self):
+        previous = scanner.STALE_SCHEMA_SUPPORTED
+        scanner.STALE_SCHEMA_SUPPORTED = None
+        error = urllib.error.HTTPError("https://supabase.test", 400, "missing column", {}, None)
+        try:
+            with patch.object(scanner, "api", side_effect=error) as api:
+                scanner.mark_stale_offers()
+                scanner.mark_stale_offers()
+            self.assertEqual(api.call_count, 1)
+            self.assertFalse(scanner.STALE_SCHEMA_SUPPORTED)
+        finally:
+            scanner.STALE_SCHEMA_SUPPORTED = previous
 
     def test_latest_retention_removes_old_details_after_durable_aggregation(self):
         migration = (ROOT / "supabase" / "migrations" / "20260802000600_durable_preferences.sql").read_text()

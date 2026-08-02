@@ -41,6 +41,7 @@ FETCH_RETRIES = 2
 PREFERENCE_FETCH_RETRIES = 3
 STALE_AFTER_HOURS = 24
 PRICE_HISTORY_LAST = {}
+STALE_SCHEMA_SUPPORTED = None
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
 AIRPORTS_FILE = Path(__file__).resolve().parents[1] / "site" / "airports.json"
 
@@ -315,12 +316,29 @@ def adaptive_query_limits():
 
 def mark_stale_offers():
     """Oznacza ceny, których Google nie potwierdził przez dobę jako nieaktualne."""
+    global STALE_SCHEMA_SUPPORTED
+    if STALE_SCHEMA_SUPPORTED is False:
+        return
     cutoff = (datetime.utcnow() - timedelta(hours=STALE_AFTER_HOURS)).isoformat() + "Z"
     try:
+        # Older Supabase projects may not have applied the quality migration
+        # yet. Detect that once and keep scanning with the legacy offer shape
+        # instead of emitting the same HTTP 400 on every run.
+        api("GET", "flight_offers", params={
+            "select": "id,verification_status",
+            "limit": "1",
+        })
+        STALE_SCHEMA_SUPPORTED = True
         api("PATCH", "flight_offers", body={"verification_status": "stale", "verification_note": "Brak potwierdzenia ceny od ponad 24 godzin"},
             params={"last_seen_at": "lt." + cutoff, "verification_status": "neq.stale"})
+    except urllib.error.HTTPError as exc:
+        if exc.code == 400:
+            STALE_SCHEMA_SUPPORTED = False
+            log("Pomijam oznaczanie starych ofert: baza nie ma jeszcze migracji jakości ofert")
+            return
+        raise
     except Exception as exc:
-        # Stara baza bez migracji nie może zatrzymać skanera.
+        # Czyszczenie pomocnicze nie może zatrzymać skanowania ofert.
         log("Nie udało się oznaczyć starych ofert: %s" % str(exc)[:120])
 
 
