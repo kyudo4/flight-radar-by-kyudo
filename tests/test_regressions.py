@@ -384,6 +384,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('name="referrer" content="no-referrer"', html)
         self.assertIn('href="https://t.me/flight_radar_kyudo_bot"', html)
 
+    def test_telegram_notification_levels_have_plain_language_labels(self):
+        html = (ROOT / "site" / "index.html").read_text()
+        app = (ROOT / "site" / "app.js").read_text()
+        for label in ("Wszystkie powiadomienia", "Interesujące", "Najlepsze okazje"):
+            self.assertIn(label, html)
+            self.assertIn(label, app)
+
     def test_frontend_loads_matches_and_offers_separately(self):
         app = (ROOT / "site" / "app.js").read_text()
         self.assertIn('select("id, monitor_id, offer_id, stars, feedback, notified_at, updated_at")', app)

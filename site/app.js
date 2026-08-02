@@ -11,6 +11,7 @@
   const AIRPORT_OVERRIDES = { GDN: "Gdańsk", WAW: "Warszawa", POZ: "Poznań", OSL: "Oslo", ARN: "Sztokholm", CPH: "Kopenhaga", VIE: "Wiedeń", BUD: "Budapeszt", MXP: "Mediolan", IST: "Stambuł", BKK: "Bangkok", SIN: "Singapur", KUL: "Kuala Lumpur", HKG: "Hongkong", HAN: "Hanoi", SGN: "Ho Chi Minh", HND: "Tokio (Haneda)", NRT: "Tokio (Narita)", ICN: "Seul" };
   const AIRPORTS = { ...AIRPORT_OVERRIDES };
   const CABINS = { BUSINESS: "Business", FIRST: "First", PREMIUM_ECONOMY: "Premium Economy", "PREMIUM-ECONOMY": "Premium Economy", ECONOMY: "Economy" };
+  const TELEGRAM_LEVELS = { 3: "Wszystkie powiadomienia", 4: "Interesujące", 5: "Najlepsze okazje" };
 
   function show(id, on = true) { $(id).classList.toggle("hidden", !on); }
   function message(text, good = false) { const el = $("authMessage"); el.textContent = text; el.className = "message" + (good ? " good" : ""); }
@@ -23,6 +24,7 @@
   const airportName = value => AIRPORTS[String(value || "").toUpperCase()] || String(value || "");
   const routeName = value => String(value || "").split(/\s*→\s*/).map(airportName).join(" → ");
   const monitorCabins = filters => Array.isArray(filters?.cabins) && filters.cabins.length ? filters.cabins : (filters?.cabin ? [filters.cabin] : []);
+  const telegramLevel = value => TELEGRAM_LEVELS[Number(value)] || "Nieustawiony";
   const offerData = match => { const relation = match?.flight_offers; return Array.isArray(relation) ? (relation[0] || {}) : (relation || {}); };
 
   async function loadAirportData() {
@@ -131,7 +133,7 @@
     const airlineRules = [(f.preferred_airlines || []).length ? `Preferowane: ${(f.preferred_airlines || []).join(", ")}` : "", (f.excluded_airlines || []).length ? `Wykluczone: ${(f.excluded_airlines || []).join(", ")}` : ""].filter(Boolean).join(" · ");
     const durationLabel = f.max_duration_h ? `maks. ${esc(f.max_duration_h)}h` : "bez limitu czasu";
     const dateLabel = f.trip_type === "round_trip" ? `${dateFmt(f.from)}–${dateFmt(f.to)} · powrót ${dateFmt(f.return_from)}–${dateFmt(f.return_to)}` : `${dateFmt(f.from)}–${dateFmt(f.to)}`;
-    return `<article class="monitor-card"><div><h3>${esc(m.name)}</h3><div class="card-meta">${esc(route)} · ${esc(cabinLabel || "—")} · ${esc(dateLabel)}</div></div><div class="card-meta">Do ${esc(f.budget_pln ?? "—")} PLN · ${durationLabel} · Telegram od ${esc(r.min_stars ?? "—")}⭐</div>${airlineRules ? `<div class="card-meta">${esc(airlineRules)}</div>` : ""}<div class="card-meta">Ostatni skan: ${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
+    return `<article class="monitor-card"><div><h3>${esc(m.name)}</h3><div class="card-meta">${esc(route)} · ${esc(cabinLabel || "—")} · ${esc(dateLabel)}</div></div><div class="card-meta">Do ${esc(f.budget_pln ?? "—")} PLN · ${durationLabel} · Telegram: ${esc(telegramLevel(r.min_stars))}</div>${airlineRules ? `<div class="card-meta">${esc(airlineRules)}</div>` : ""}<div class="card-meta">Ostatni skan: ${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
   }
 
   function updateRoundTripFields() {
