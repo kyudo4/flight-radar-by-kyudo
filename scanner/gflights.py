@@ -116,8 +116,10 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
         if exc.code in {403, 429, 503}:
             raise BlockedError("Google HTTP %s" % exc.code) from exc
         raise
-    if status != 200 or "Before you continue" in body[:200000]:
-        raise BlockedError("consent wall / status %s" % status)
+    body_head = body[:200000].lower()
+    block_markers = ("before you continue", "captcha", "unusual traffic", "not a robot", "automated queries")
+    if status != 200 or any(marker in body_head for marker in block_markers):
+        raise BlockedError("Google consent/CAPTCHA wall / status %s" % status)
     try:
         result = parse_response(_FakeResponse(status, body))
     except RuntimeError:

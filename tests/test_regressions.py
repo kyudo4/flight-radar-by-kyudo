@@ -342,6 +342,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
             with self.assertRaises(gflights.BlockedError):
                 gflights.fetch_gf("POZ", "BKK", "2026-09-02")
 
+    def test_google_captcha_body_is_classified_as_block(self):
+        response = type("CaptchaResponse", (), {"status": 200, "read": lambda self: b"<html>unusual traffic - captcha</html>"})()
+        with patch.object(gflights.urllib.request, "urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value = response
+            with self.assertRaises(gflights.BlockedError):
+                gflights.fetch_gf("POZ", "BKK", "2026-09-01")
+
     def test_invalid_telegram_feedback_is_rejected_before_database_write(self):
         api_calls = []
 
