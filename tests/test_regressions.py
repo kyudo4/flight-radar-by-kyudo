@@ -287,6 +287,25 @@ class FlightRadarRegressionTests(unittest.TestCase):
             with self.assertRaises(google_browser.BrowserNoFlightsError):
                 google_browser._load_cards(NoFlightPage(), "https://google.test")
 
+    def test_google_generic_empty_state_is_not_a_global_source_failure(self):
+        class EmptyResultPage:
+            def goto(self, *args, **kwargs): pass
+            def get_by_role(self, role, **kwargs):
+                if role == "heading":
+                    return type("Heading", (), {"wait_for": lambda self, timeout=None: None})()
+                return type("Empty", (), {"count": lambda self: 0})()
+            def locator(self, selector):
+                if selector == "body":
+                    return type("Body", (), {
+                        "inner_text": lambda self, timeout=None:
+                            "Search results No results returned. Oops, something went wrong. Reload"
+                    })()
+                return type("Empty", (), {"count": lambda self: 0})()
+            def wait_for_timeout(self, _): pass
+
+        with self.assertRaises(google_browser.BrowserNoFlightsError):
+            google_browser._load_cards(EmptyResultPage(), "https://google.test")
+
     def test_no_flights_fallback_is_returned_as_an_empty_result(self):
         with patch.object(gflights, "_fetch_server", side_effect=gflights.SourceParseError("payload moved")), \
              patch.object(gflights.google_browser, "fetch_rendered", side_effect=google_browser.BrowserNoFlightsError("empty")):

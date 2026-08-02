@@ -185,6 +185,12 @@ def _wait_for_cards(page, timeout_ms=25000):
     no_flight_markers = (
         "no flights", "no available flights", "no matching flights",
         "couldn't find any flights", "could not find any flights",
+        # Some origin/destination pairs are rendered by Google as the generic
+        # empty-state below (often followed by "Oops, something went wrong")
+        # instead of the usual "No flights" copy.  There are no offer cards
+        # to parse, so this is a valid empty query result—not evidence that
+        # every Google Flights request in the scan is broken.
+        "no results returned",
     )
     while time.monotonic() < deadline:
         labels = _card_labels(page)
