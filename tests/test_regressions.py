@@ -1021,6 +1021,18 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('monitor?.filters?.budget_pln', app)
         self.assertIn('id="loadMoreOffersButton"', (ROOT / "site" / "index.html").read_text())
 
+    def test_offer_and_monitor_cards_use_stacked_labeled_details(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        styles = (ROOT / "site" / "styles.css").read_text()
+        self.assertIn('class="offer-info"', app)
+        self.assertIn('class="offer-info-row"', app)
+        for label in ("Linia", "Klasa", "Termin", "Wylot", "Powrót", "Samolot", "Źródło"):
+            self.assertIn(f'<span>{label}</span>', app)
+        self.assertIn('class="monitor-info"', app)
+        self.assertIn('.offer-info{display:grid', styles)
+        self.assertIn('@media(max-width:760px){.offer-card-head', styles)
+        self.assertIn('.offer-info,.monitor-info{grid-template-columns:1fr;gap:10px}', styles)
+
     def test_invite_link_has_real_copy_control_and_fallback(self):
         app = (ROOT / "site" / "app.js").read_text()
         self.assertIn('data-copy-invite', app)
@@ -1248,8 +1260,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260802-11', html)
-        self.assertIn('styles.css?v=20260802-5', html)
+        self.assertIn('app.js?v=20260803-12', html)
+        self.assertIn('styles.css?v=20260803-6', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
         app = (ROOT / "site" / "app.js").read_text()
