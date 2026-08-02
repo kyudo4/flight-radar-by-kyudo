@@ -22,6 +22,16 @@
   const csv = value => value.split(",").map(x => x.trim().toUpperCase()).filter(Boolean);
   const dateFmt = value => value ? new Date(value + "T12:00:00").toLocaleDateString("pl-PL") : "—";
   const dateTimeFmt = value => value ? new Date(value).toLocaleString("pl-PL", { dateStyle: "short", timeStyle: "short" }) : "jeszcze nie sprawdzono";
+  const isoDate = value => {
+    const date = value ? new Date(`${value}T12:00:00`) : new Date();
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  };
+  const addDays = (value, days) => {
+    const date = new Date(`${value}T12:00:00`);
+    date.setDate(date.getDate() + days);
+    return isoDate(date.toISOString().slice(0, 10));
+  };
+  const todayIso = () => isoDate();
   const airportName = value => AIRPORTS[String(value || "").toUpperCase()] || String(value || "");
   const routeName = value => String(value || "").split(/\s*→\s*/).map(airportName).join(" → ");
   const monitorCabins = filters => Array.isArray(filters?.cabins) && filters.cabins.length ? filters.cabins : (filters?.cabin ? [filters.cabin] : []);
@@ -89,7 +99,7 @@
     $("closeDialog").onclick = $("cancelDialog").onclick = () => $("monitorDialog").close();
     $("monitorForm").onsubmit = saveMonitor;
     $("monitorTripType").onchange = updateRoundTripFields;
-    ["monitorFrom", "monitorTo", "monitorReturnFrom", "monitorReturnTo"].forEach(id => $(id).oninput = updateMonitorEstimate);
+    ["monitorFrom", "monitorTo", "monitorReturnFrom", "monitorReturnTo"].forEach(id => $(id).oninput = () => { updateDateConstraints(); updateMonitorEstimate(); });
     $("refreshButton").onclick = async () => { await loadMonitors(); await loadOffers(true); };
     $("loadMoreOffersButton").onclick = () => loadOffers(false);
     ["offerSearch", "offerCabinFilter", "offerStarsFilter", "offerSort"].forEach(id => $(id).oninput = renderOffers);
@@ -141,7 +151,32 @@
     const roundTrip = $("monitorTripType").value === "round_trip";
     show("roundTripFields", roundTrip);
     ["monitorReturnFrom", "monitorReturnTo"].forEach(id => $(id).required = roundTrip);
+    updateDateConstraints();
     updateMonitorEstimate();
+  }
+
+  function updateDateConstraints() {
+    const today = todayIso();
+    const from = $("monitorFrom"), to = $("monitorTo");
+    const returnFrom = $("monitorReturnFrom"), returnTo = $("monitorReturnTo");
+    if (!from || !to || !returnFrom || !returnTo) return;
+
+    from.min = today;
+    to.min = from.value && from.value >= today ? from.value : today;
+
+    // A value already loaded from an old monitor must not survive outside the
+    // new selectable range. This also keeps the form valid when the calendar
+    // rolls past an existing departure date.
+    if (from.value && from.value < today) from.value = "";
+    if (to.value && to.value < to.min) to.value = "";
+    if (from.value && to.value && to.value < from.value) to.value = from.value;
+
+    const minimumReturn = from.value ? addDays(from.value, 1) : addDays(today, 1);
+    returnFrom.min = minimumReturn;
+    if (returnFrom.value && returnFrom.value < minimumReturn) returnFrom.value = "";
+    if (returnFrom.value && to.value && returnFrom.value > to.value) returnFrom.value = "";
+    returnTo.min = returnFrom.value || minimumReturn;
+    if (returnTo.value && returnTo.value < returnTo.min) returnTo.value = "";
   }
 
   function updateMonitorEstimate() {
