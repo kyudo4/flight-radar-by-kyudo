@@ -609,6 +609,18 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_sparse_market_data_does_not_overrate_one_observation(self):
         self.assertIsNone(scanner.market_price_reference([4500, 7000]))
 
+    def test_market_reference_counts_distinct_offers_with_the_same_price(self):
+        offers = [
+            {"airline": "AY", "price_pln": 4500, "departure": "08:00", "duration_h": 18, "stops": 1},
+            {"airline": "LH", "price_pln": 7000, "departure": "09:00", "duration_h": 17, "stops": 1},
+            {"airline": "KL", "price_pln": 7000, "departure": "10:00", "duration_h": 19, "stops": 1},
+            {"airline": "AF", "price_pln": 7000, "departure": "11:00", "duration_h": 20, "stops": 1},
+        ]
+        self.assertEqual(scanner.market_price_reference(offers), 7000)
+
+        duplicated_card = [offers[0], offers[1], dict(offers[1])]
+        self.assertIsNone(scanner.market_price_reference(duplicated_card))
+
     def test_durable_bad_airline_signal_applies_across_monitors_and_dates(self):
         flight = {"airline": "CA", "airline_name": "Air China", "price_pln": 5000, "duration_h": 14, "stops": 1}
         filters = {"budget_pln": 6000}
@@ -795,6 +807,66 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual((added, sent), (1, 1))
         self.assertTrue(saved_match["telegram_eligible"])
         self.assertTrue(saved_match["new_airline"])
+
+    def test_same_airline_from_prior_month_is_not_marked_as_new(self):
+        previous = [{
+            "id": "old-match", "offer_id": "old-offer", "min_price_for_user": 5000,
+            "notified_at": "2026-08-01T00:00:00Z", "last_notified_price": 5000,
+            "telegram_eligible": False, "new_airline": False, "feedback": None,
+            "flight_offers": {
+                "route": "POZ → BKK", "travel_date": "2026-09-05", "return_date": None,
+                "trip_type": "one_way", "cabin": "BUSINESS", "airline": "QR",
+                "airline_name": "Qatar Airways", "price_pln": 5000,
+            },
+        }]
+        monitor = {
+            "id": "monitor-1", "user_id": "user-1",
+            "filters": {"max_stops": 2, "budget_pln": 6000},
+            "telegram_rules": {"min_stars": 4, "drop_percent": 10, "immediate_new_low": False},
+        }
+        task = {"origin": "POZ", "dest": "BKK", "date": "2026-10-05", "cabin": "business", "trip_type": "one_way"}
+        flight = {"airline": "QR", "airline_name": "Qatar Airways", "price_pln": 4800,
+                  "duration_h": 14, "stops": 1, "departure": "10:00"}
+        market = [
+            flight,
+            {"airline": "EY", "price_pln": 7000, "duration_h": 14, "stops": 1, "departure": "11:00"},
+            {"airline": "EK", "price_pln": 7200, "duration_h": 15, "stops": 1, "departure": "12:00"},
+        ]
+        saved_match = {}
+
+        def fake_api(method, path, body=None, params=None):
+            if method == "POST" and path == "flight_offers":
+                return [{"id": "new-offer", **body}]
+            if method == "POST" and path == "user_matches":
+                saved_match.update(body)
+                return [{"id": "new-match", **body}]
+            if method == "GET" and path == "telegram_connections":
+                return [{"chat_id": "123"}]
+            return []
+
+        with patch.object(scanner, "api", side_effect=fake_api), patch.object(scanner, "telegram") as telegram:
+            added, sent = scanner.process_candidate(
+                monitor, task, flight, previous=previous, preferences=[], market_prices=market
+            )
+        self.assertEqual((added, sent), (1, 0))
+        self.assertFalse(saved_match["new_airline"])
+        telegram.assert_not_called()
+
+    def test_source_error_routes_are_limited_to_the_current_streak(self):
+        count, routes = scanner.reset_source_error_streak()
+        count, routes = scanner.record_source_error(count, routes, ("WAW", "BKK"))
+        count, routes = scanner.reset_source_error_streak()
+        count, routes = scanner.record_source_error(count, routes, ("POZ", "NRT"))
+        count, routes = scanner.reset_source_error_streak()
+        for _ in range(3):
+            count, routes = scanner.record_source_error(count, routes, ("GDN", "KIX"))
+        self.assertEqual((count, len(routes)), (3, 1))
+        self.assertFalse(scanner.source_circuit_open(count, routes))
+
+        count, routes = scanner.reset_source_error_streak()
+        for route in (("WAW", "BKK"), ("POZ", "NRT"), ("GDN", "KIX")):
+            count, routes = scanner.record_source_error(count, routes, route)
+        self.assertTrue(scanner.source_circuit_open(count, routes))
 
     def test_unnotified_alert_eligibility_survives_missing_telegram_connection(self):
         monitor = {"id": "monitor-1", "user_id": "user-1", "filters": {"max_duration_h": 24, "max_stops": 2, "budget_pln": 6000},

@@ -557,14 +557,57 @@ def market_price_reference(market_prices):
     values = []
     seen = set()
     for value in market_prices or []:
+        if isinstance(value, dict):
+            raw_price = value.get("price_pln")
+            explicit_key = value.get("_market_key")
+            identity = (
+                airline_identity(value),
+                str(value.get("departure") or ""),
+                value.get("duration_h"),
+                value.get("stops"),
+                value.get("return_duration_h"),
+                value.get("return_stops"),
+            )
+        else:
+            raw_price = value
+            explicit_key = None
+            identity = None
         try:
-            number = float(value)
+            number = float(raw_price)
         except (TypeError, ValueError):
             continue
-        if number > 0 and number not in seen:
-            seen.add(number)
+        if number <= 0:
+            continue
+        if explicit_key:
+            observation_key = ("offer", str(explicit_key))
+        elif identity and any(part not in (None, "") for part in identity):
+            # Google potrafi zwrócić tę samą kartę kilka razy. Usuwamy tylko
+            # dokładny duplikat oferty, ale zachowujemy niezależne linie lub
+            # godziny odlotu sprzedawane w tej samej cenie.
+            observation_key = ("offer", number) + identity
+        else:
+            # Starsza historia nie ma pełnej tożsamości oferty, więc może być
+            # bezpiecznie odszumiona wyłącznie po wartości ceny.
+            observation_key = ("price", number)
+        if observation_key not in seen:
+            seen.add(observation_key)
             values.append(number)
     return statistics.median(values) if len(values) >= 3 else None
+
+
+def reset_source_error_streak():
+    """Start a fresh consecutive source-error window after a good response."""
+    return 0, set()
+
+
+def record_source_error(count, routes, route):
+    updated_routes = set(routes)
+    updated_routes.add(route)
+    return count + 1, updated_routes
+
+
+def source_circuit_open(count, routes):
+    return count >= 3 and len(routes) >= 3
 
 
 def market_price_stars(price, market_prices):
@@ -815,12 +858,19 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
         old_airline = airline_identity(old_offer)
         old_cabin = str(old_offer.get("cabin") or "").upper().replace("-", "_")
         old_trip = old_offer.get("trip_type") or ("round_trip" if old_offer.get("return_date") else "one_way")
+        same_route_kind = old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value
         same_month = not old_offer.get("travel_date") or old_offer.get("travel_date", "")[:7] == task["date"][:7]
-        if old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value and same_month:
+        if same_route_kind:
             route_airlines.add(old_airline)
-            for value in (old_offer.get("price_pln"), old.get("min_price_for_user")):
-                if value is not None:
-                    route_prices.append(value)
+        if same_route_kind and same_month:
+            historical_price = old_offer.get("price_pln")
+            if historical_price is None:
+                historical_price = old.get("min_price_for_user")
+            if historical_price is not None:
+                route_prices.append({
+                    "price_pln": historical_price,
+                    "_market_key": "history:%s" % (old.get("offer_id") or old.get("id") or "unknown"),
+                })
         if old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value and old_offer.get("return_date") == return_date and old_airline == airline:
             if old.get("feedback"):
                 matching_feedback.append(old["feedback"])
@@ -941,8 +991,7 @@ def main():
     task_errors = list(sync_errors)
     blocked = False
     executed_count = 0
-    source_errors_in_row = 0
-    source_error_routes = set()
+    source_errors_in_row, source_error_routes = reset_source_error_streak()
     successful_google_tasks = 0
     failed_google_tasks = 0
     source_degraded = False
@@ -969,7 +1018,7 @@ def main():
             task_failed = False
             try:
                 _level, flights = fetch_task(task)
-                source_errors_in_row = 0
+                source_errors_in_row, source_error_routes = reset_source_error_streak()
             except gflights.BlockedError as exc:
                 # Jedna twarda blokada zatrzymuje cały kolektor Google. Kolejne
                 # pozycje pozostają zaległe i wrócą w następnym przebiegu.
@@ -985,9 +1034,12 @@ def main():
             except Exception as exc:
                 task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
                 log("Pominięto zapytanie po błędzie źródła: %s" % task_errors[-1])
-                source_errors_in_row += 1
+                source_errors_in_row, source_error_routes = record_source_error(
+                    source_errors_in_row,
+                    source_error_routes,
+                    (task["origin"], task["dest"]),
+                )
                 failed_google_tasks += 1
-                source_error_routes.add((task["origin"], task["dest"]))
                 task_failed = True
             else:
                 successful_google_tasks += 1
@@ -1007,7 +1059,7 @@ def main():
                             added, sent = process_candidate(
                                 monitor, task, flight, history_cache[monitor["id"]],
                                 preference_cache[user_id],
-                                market_prices=[item.get("price_pln") for item in flights if quality(item, monitor.get("filters") or {})],
+                                market_prices=[item for item in flights if quality(item, monitor.get("filters") or {})],
                             )
                             offers_count += added; sent_count += sent
                         except Exception as exc:
@@ -1022,7 +1074,7 @@ def main():
             if task_failed:
                 retry_at = now + timedelta(hours=1)
                 api("PATCH", "monitor_scan_items", body={"next_scan_at": retry_at.isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
-                if source_errors_in_row >= 3 and len(source_error_routes) >= 3:
+                if source_circuit_open(source_errors_in_row, source_error_routes):
                     task_errors.append("Google: obwód ochronny po trzech kolejnych błędach źródła")
                     source_degraded = True
                     break
