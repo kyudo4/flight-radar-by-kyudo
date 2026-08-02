@@ -1033,6 +1033,15 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('@media(max-width:760px){.offer-card-head', styles)
         self.assertIn('.offer-info,.monitor-info{grid-template-columns:1fr;gap:10px}', styles)
 
+    def test_monitor_dialog_is_scrollable_and_explains_repeat_alert_threshold(self):
+        html = (ROOT / "site" / "index.html").read_text()
+        styles = (ROOT / "site" / "styles.css").read_text()
+        self.assertIn("Ponowne powiadomienie po spadku ceny o (%)", html)
+        self.assertIn("cena musi spaść o co najmniej 10%", html)
+        self.assertIn('aria-describedby="telegramDropHint"', html)
+        self.assertIn("dialog form{display:grid;gap:14px;max-height:calc(100dvh - 24px);overflow-y:auto}", styles)
+        self.assertIn("dialog{width:calc(100% - 20px);max-height:calc(100dvh - 16px)", styles)
+
     def test_invite_link_has_real_copy_control_and_fallback(self):
         app = (ROOT / "site" / "app.js").read_text()
         self.assertIn('data-copy-invite', app)
@@ -1260,8 +1269,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260803-12', html)
-        self.assertIn('styles.css?v=20260803-6', html)
+        self.assertIn('app.js?v=20260803-13', html)
+        self.assertIn('styles.css?v=20260803-7', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
         app = (ROOT / "site" / "app.js").read_text()
