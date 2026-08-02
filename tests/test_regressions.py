@@ -642,6 +642,20 @@ class FlightRadarRegressionTests(unittest.TestCase):
             self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
         telegram.assert_not_called()
 
+    def test_round_trip_telegram_alert_places_each_leg_on_its_own_line(self):
+        offer = {
+            "route": "GDN → KIX", "cabin": "ECONOMY", "airline_name": "Finnair",
+            "price_pln": 4500, "travel_date": "2026-10-22", "return_date": "2026-11-06",
+            "link": "https://www.google.com/travel/flights", "raw": {
+                "round_trip_verified": True, "outbound_duration_h": 17.666,
+                "outbound_stops": 1, "return_duration_h": 17.25, "return_stops": 1,
+            },
+        }
+        message = scanner.alert_text(offer, 3, "match-1")
+        self.assertIn("🗓 2026-10-22 → 2026-11-06\n", message)
+        self.assertIn("🛫 Tam: 17h 40m · 1 przesiadka\n↩️ Powrót: 17h 15m · 1 przesiadka", message)
+        self.assertNotIn("17h 40m, 1 przes. · powrót", message)
+
     def test_database_budget_guard_is_part_of_read_policy(self):
         migration = (ROOT / "supabase" / "migrations" / "20260728230000_personal_data_isolation.sql").read_text()
         self.assertIn("match_within_monitor_budget", migration)

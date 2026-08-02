@@ -638,6 +638,19 @@ def save_offer(task, flight):
 
 
 def alert_text(offer, stars, match_id):
+    def stop_label(value):
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            return "%s przesiad." % html.escape(str(value), quote=True)
+        if count == 0:
+            return "bez przesiadek"
+        if count == 1:
+            return "1 przesiadka"
+        if count < 5:
+            return "%d przesiadki" % count
+        return "%d przesiadek" % count
+
     duration = offer.get("duration_minutes") or 0
     raw = offer.get("raw") if isinstance(offer.get("raw"), dict) else {}
     route = html.escape(str(offer.get("route", "")), quote=True)
@@ -654,13 +667,16 @@ def alert_text(offer, stars, match_id):
     if offer.get("return_date") and raw.get("round_trip_verified") and raw.get("return_duration_h") is not None:
         outbound_duration = raw.get("outbound_duration_h") or 0
         return_duration = raw.get("return_duration_h") or 0
-        travel_quality = "tam %dh %02dm, %s przes. · powrót %dh %02dm, %s przes." % (
-            int(outbound_duration), round((outbound_duration % 1) * 60), raw.get("outbound_stops", "?"),
-            int(return_duration), round((return_duration % 1) * 60), raw.get("return_stops", "?"),
+        outbound_stops = raw.get("outbound_stops", "?")
+        return_stops = raw.get("return_stops", "?")
+        travel_quality = "🛫 Tam: %dh %02dm · %s\n↩️ Powrót: %dh %02dm · %s" % (
+            int(outbound_duration), round((outbound_duration % 1) * 60), stop_label(outbound_stops),
+            int(return_duration), round((return_duration % 1) * 60), stop_label(return_stops),
         )
     else:
-        travel_quality = "%dh %02dm · %s przes." % (duration // 60, duration % 60, offer.get("stops", "?"))
-    return ("<b>%s</b>\n🧭 <b>%s</b> · %s\n✈️ %s%s\n💰 <b>%s PLN</b>\n🗓 %s · %s%s\n🔗 <a href=\"%s\">Otwórz ofertę</a>" % ("⭐" * stars, route, cabin, airline, aircraft_line, f"{offer.get('price_pln') or 0:,}".replace(",", " "), dates, travel_quality, tag_line, html.escape(link, quote=True)))
+        travel_quality = "%dh %02dm · %s" % (duration // 60, duration % 60, stop_label(offer.get("stops", "?")))
+    quality_separator = "\n" if "\n" in travel_quality else " · "
+    return ("<b>%s</b>\n🧭 <b>%s</b> · %s\n✈️ %s%s\n💰 <b>%s PLN</b>\n🗓 %s%s%s\n🔗 <a href=\"%s\">Otwórz ofertę</a>" % ("⭐" * stars, route, cabin, airline, aircraft_line, f"{offer.get('price_pln') or 0:,}".replace(",", " "), dates, quality_separator, travel_quality + tag_line, html.escape(link, quote=True)))
 
 
 def airline_identity(flight):
