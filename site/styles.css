@@ -10,3 +10,6 @@
 .invite-link-row{display:flex;align-items:center;gap:8px;max-width:min(680px,100%)}.invite-link{min-width:220px;flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--text);font-size:12px}.copy-failed{border-color:#d97706!important;color:#b45309!important}@media(max-width:760px){.invite-link-row{align-items:stretch;flex-direction:column}.invite-link{min-width:0;width:100%}}
 .cabin-options{grid-column:1 / -1;display:flex;flex-wrap:wrap;gap:8px 14px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:0}.cabin-options legend{padding:0 5px;color:var(--muted);font-size:13px;font-weight:700}.cabin-options .choice{display:flex;align-items:center;gap:6px;color:var(--ink);font-size:13px;font-weight:700}.cabin-options input{width:auto}
 .load-more{display:block;margin:16px auto 0}
+#roundTripFields{grid-column:1 / -1;width:100%;margin-top:0;align-items:start}
+#roundTripFields label{min-width:0}
+.form-grid{align-items:start}
