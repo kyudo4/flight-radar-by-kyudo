@@ -165,6 +165,19 @@ def task_from_item(item):
 def sync_monitor_scan_items(monitor):
     """Materializuje każdą kombinację monitora jako niezależną pozycję kolejki."""
     desired = monitor_combinations(monitor)
+    try:
+        # Database-side reconciliation is atomic and idempotent.  It prevents
+        # a concurrent monitor update from producing a false HTTP 409.
+        api("POST", "rpc/sync_monitor_scan_items", body={
+            "p_monitor_id": monitor["id"],
+            "p_items": desired,
+        })
+        return
+    except urllib.error.HTTPError as exc:
+        # Additive deployment: keep the old path working until migration 008
+        # reaches production.  Other HTTP errors must remain visible.
+        if exc.code not in {400, 404}:
+            raise
     existing = fetch_all_rows("monitor_scan_items", {
         "monitor_id": "eq." + monitor["id"],
         "select": "id,origin,destination,travel_date,return_date,trip_type,cabin",
@@ -186,7 +199,34 @@ def sync_monitor_scan_items(monitor):
         # one-way and round-trip partial indexes intentionally have different
         # conflict targets, so a plain insert is safer than pretending there
         # is one universal PostgREST on_conflict target.
-        api("POST", "monitor_scan_items", body=batch)
+        try:
+            api("POST", "monitor_scan_items", body=batch)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 409:
+                raise
+            # Rare race with an edit trigger: retry individually and accept a
+            # 409 only after the exact queue row is confirmed to exist.
+            for item in batch:
+                try:
+                    api("POST", "monitor_scan_items", body=item)
+                except urllib.error.HTTPError as item_exc:
+                    if item_exc.code != 409 or not _scan_item_exists(item):
+                        raise
+
+
+def _scan_item_exists(item):
+    params = {
+        "monitor_id": "eq." + item["monitor_id"],
+        "origin": "eq." + item["origin"],
+        "destination": "eq." + item["destination"],
+        "travel_date": "eq." + item["travel_date"],
+        "trip_type": "eq." + item["trip_type"],
+        "cabin": "eq." + item["cabin"],
+        "return_date": ("eq." + item["return_date"]) if item.get("return_date") else "is.null",
+        "select": "id",
+        "limit": "1",
+    }
+    return bool(api("GET", "monitor_scan_items", params=params))
 
 
 class ScanBlockedRun(RuntimeError):
@@ -786,6 +826,7 @@ def main():
     executed_count = 0
     source_errors_in_row = 0
     source_degraded = False
+    source_capacity_reached = False
     history_cache = {}
     preference_cache = {}
     try:
@@ -806,6 +847,11 @@ def main():
                 task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
                 log("Przerwano Google po wykryciu blokady: %s" % task_errors[-1])
                 blocked = True
+                break
+            except gflights.SourceCapacityError as exc:
+                task_errors.append("Google: %s; pozostałe kombinacje zachowano na kolejny skan" % str(exc)[:180])
+                log(task_errors[-1])
+                source_capacity_reached = True
                 break
             except Exception as exc:
                 task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
@@ -868,7 +914,7 @@ def main():
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
-        final_status = "blocked" if blocked else ("error" if source_degraded else ("partial" if task_errors else "ok"))
+        final_status = "blocked" if blocked else ("error" if source_degraded else ("partial" if task_errors or source_capacity_reached else "ok"))
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": final_status, "blocked": blocked, "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
         log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
         if blocked:

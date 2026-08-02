@@ -29,7 +29,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
    `20260802000400_reliability_retention.sql` i
    `20260802000500_round_trip_retention_telegram.sql` oraz
    `20260802000600_durable_preferences.sql` i
-   `20260802000700_preference_integrity.sql`.
+   `20260802000700_preference_integrity.sql` i
+   `20260802000800_atomic_scan_queue.sql`.
 2. W BotFather > Bot Settings > Web Login dodaj domenę panelu jako Allowed Origin
    i pozostaw Client ID/Secret dla tego samego bota.
 3. W Supabase Edge Functions utwórz funkcję `telegram-auth` z pliku
@@ -58,7 +59,10 @@ jej stanu, tokenów Telegrama ani historii alertów.
 10. Workflow `Flight Radar retention cleanup` uruchamia cotygodniowe sprzątanie historii
     cen, wygasłych monitorów, starych skanów i zaproszeń.
 
-Do działania skanera potrzebny jest Python 3.11 i zależność `fast-flights`.
+Do działania skanera potrzebny jest Python 3.11. Lekki odczyt Google działa przez
+`fast-flights`, a przy przeniesieniu danych do JavaScript automatycznie uruchamiany
+jest jeden współdzielony, headless Chrome (Playwright). Awaryjny odczyt ma osobny
+limit i nigdy nie zapętla zapytań po CAPTCHA.
 Wyniki i ustawienia nie są zapisywane w repozytorium.
 
 ## Zachowanie ofert

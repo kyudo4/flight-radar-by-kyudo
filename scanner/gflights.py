@@ -8,6 +8,7 @@ po stronie serwera) i parsuje serwerowy payload ds:1 własnym parserem.
 """
 
 import re
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +17,7 @@ from fast_flights import FlightData, Passengers
 from fast_flights.filter import create_filter
 
 import google_parser
+import google_browser
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
@@ -42,6 +44,10 @@ class BlockedError(Exception):
 
 class SourceParseError(RuntimeError):
     """Google odpowiedział, ale format nie zawierał czytelnych danych."""
+
+
+class SourceCapacityError(RuntimeError):
+    """Bezpieczny limit cięższego, renderowanego odczytu został wykorzystany."""
 
 
 def airline_code(name):
@@ -88,8 +94,8 @@ def _parse_price_pln(s):
         return None
 
 
-def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
-    """Zwraca (price_level, [dict na lot]). Rzuca BlockedError przy blokadzie."""
+def _fetch_server(origin, dest, date, seat="business", return_date=None, timeout=35):
+    """Lekki odczyt z HTML serwera, bez uruchamiania przeglądarki."""
     url = build_url(origin, dest, date, seat, return_date=return_date)
     req = urllib.request.Request(url)
     req.add_header("User-Agent", UA)
@@ -150,6 +156,35 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
     if not flights:
         raise SourceParseError("Google zwrócił oferty bez wymaganej ceny/czasu/przesiadek")
     return parsed[0].get("price_pln") if parsed else None, flights
+
+
+def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
+    """Return live offers, falling back to one reusable rendered Chrome page."""
+    url = build_url(origin, dest, date, seat, return_date=return_date)
+    try:
+        return _fetch_server(origin, dest, date, seat, return_date, timeout)
+    except (BlockedError, SourceParseError) as lightweight_error:
+        if os.environ.get("GOOGLE_BROWSER_FALLBACK", "true").lower() == "false":
+            raise
+        try:
+            rendered = google_browser.fetch_rendered(url, return_date=return_date)
+        except google_browser.BrowserCapacityError as exc:
+            raise SourceCapacityError(str(exc)) from exc
+        except google_browser.BrowserBlockedError as exc:
+            raise BlockedError(str(exc)) from exc
+        except google_browser.BrowserParseError as exc:
+            raise SourceParseError(
+                "%s; odczyt renderowany: %s" % (str(lightweight_error), str(exc))
+            ) from exc
+        flights = []
+        for flight in rendered:
+            normalized = dict(flight)
+            normalized["airline"] = airline_code(normalized.get("airline_name", ""))
+            normalized["link"] = normalized.get("link") or url
+            flights.append(normalized)
+        if not flights:
+            raise SourceParseError("Awaryjny Chrome nie zwrócił ofert")
+        return None, flights
 
 
 def _best_value(flights):

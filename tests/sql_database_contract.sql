@@ -73,9 +73,30 @@ create table public.telegram_auth_attempts (
   attempted_at timestamptz not null default now()
 );
 
+create table public.monitor_scan_items (
+  id uuid primary key default gen_random_uuid(),
+  monitor_id uuid not null references public.monitors(id) on delete cascade,
+  origin text not null,
+  destination text not null,
+  travel_date date not null,
+  return_date date,
+  trip_type text not null default 'one_way',
+  cabin text not null,
+  last_scanned_at timestamptz,
+  next_scan_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+create unique index monitor_scan_items_one_way_key
+  on public.monitor_scan_items(monitor_id, origin, destination, travel_date, cabin)
+  where return_date is null and trip_type = 'one_way';
+create unique index monitor_scan_items_round_trip_key
+  on public.monitor_scan_items(monitor_id, origin, destination, travel_date, return_date, cabin)
+  where return_date is not null and trip_type = 'round_trip';
+
 \ir ../supabase/migrations/20260802000500_round_trip_retention_telegram.sql
 \ir ../supabase/migrations/20260802000600_durable_preferences.sql
 \ir ../supabase/migrations/20260802000700_preference_integrity.sql
+\ir ../supabase/migrations/20260802000800_atomic_scan_queue.sql
 
 insert into public.profiles(id) values ('00000000-0000-0000-0000-000000000001');
 insert into public.monitors(id, user_id, filters) values (
@@ -83,6 +104,23 @@ insert into public.monitors(id, user_id, filters) values (
   '00000000-0000-0000-0000-000000000001',
   '{"budget_pln": 5000}'
 );
+
+-- Queue reconciliation can be repeated and replaces stale combinations
+-- without unique-key conflicts.
+select public.sync_monitor_scan_items(
+  '10000000-0000-0000-0000-000000000001',
+  '[{"origin":"WAW","destination":"NRT","travel_date":"2026-10-01","return_date":null,"trip_type":"one_way","cabin":"economy"}]'::jsonb
+);
+select public.sync_monitor_scan_items(
+  '10000000-0000-0000-0000-000000000001',
+  '[{"origin":"WAW","destination":"NRT","travel_date":"2026-10-01","return_date":null,"trip_type":"one_way","cabin":"economy"}]'::jsonb
+);
+do $$ begin
+  if (select count(*) from public.monitor_scan_items
+      where monitor_id = '10000000-0000-0000-0000-000000000001') <> 1 then
+    raise exception 'atomic scan queue is not idempotent';
+  end if;
+end $$;
 
 -- An old unrated result is disposable.
 insert into public.flight_offers(id, route, origin, destination, travel_date, cabin, airline, price_pln, duration_minutes, last_seen_at)

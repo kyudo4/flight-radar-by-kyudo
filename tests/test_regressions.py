@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scanner"))
 
 import friends_scanner as scanner
 import gflights
+import google_browser
 import google_parser
 import rss
 import telegram_io
@@ -81,6 +82,35 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(flights[0]["price_pln"], 4500)
         self.assertEqual(flights[0]["stops"], 0)
         self.assertEqual(flights[0]["airline_name"], "Qatar Airways")
+
+    def test_rendered_google_card_parser_uses_accessible_flight_data(self):
+        label = (
+            "From 6,653 Polish zlotys round trip total. 2 stops flight with KLM and Air France. "
+            "Operated by KLM Cityhopper. Leaves Gdansk Lech Walesa Airport at 6:05 AM on "
+            "Wednesday, October 21 and arrives at Kansai International Airport at 9:40 AM on "
+            "Thursday, October 22. Total duration 20 hr 35 min. Layover details. Select flight"
+        )
+        card = google_browser.parse_card_label(label)
+        self.assertEqual(card["price_pln"], 6653)
+        self.assertEqual(card["stops"], 2)
+        self.assertAlmostEqual(card["duration_h"], 20 + 35 / 60, places=2)
+        self.assertEqual(card["airline_name"], "KLM and Air France")
+        self.assertIn("6:05 AM", card["departure"])
+
+    def test_google_uses_rendered_fallback_when_server_payload_moves(self):
+        rendered = [{
+            "airline_name": "Qatar Airways", "price_pln": 4300,
+            "duration_h": 14.5, "stops": 1, "departure": "10:00 → 08:30",
+            "round_trip_verified": True, "outbound_duration_h": 14.5,
+            "outbound_stops": 1, "return_duration_h": None,
+            "return_stops": None, "return_departure": "", "link": "https://google.test",
+        }]
+        with patch.object(gflights, "_fetch_server", side_effect=gflights.SourceParseError("old payload")), \
+             patch.object(gflights.google_browser, "fetch_rendered", return_value=rendered) as fallback:
+            _, flights = gflights.fetch_gf("POZ", "BKK", "2026-09-02")
+        self.assertEqual(flights[0]["airline"], "QR")
+        self.assertEqual(flights[0]["price_pln"], 4300)
+        fallback.assert_called_once()
 
     def test_google_parser_only_verifies_round_trip_when_return_leg_is_present(self):
         outbound = [None, None, "Qatar", "POZ", "Poznań Airport", "Bangkok", "BKK", None,
@@ -524,22 +554,39 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_google_http_throttling_is_classified_as_block(self):
         error = urllib.error.HTTPError("https://google.test", 429, "too many requests", {}, None)
-        with patch.object(gflights.urllib.request, "urlopen", side_effect=error):
+        with patch.dict(gflights.os.environ, {"GOOGLE_BROWSER_FALLBACK": "false"}), \
+             patch.object(gflights.urllib.request, "urlopen", side_effect=error):
             with self.assertRaises(gflights.BlockedError):
                 gflights.fetch_gf("POZ", "BKK", "2026-09-02")
 
     def test_google_http_conflict_is_classified_as_block(self):
         error = urllib.error.HTTPError("https://google.test", 409, "conflict", {}, None)
-        with patch.object(gflights.urllib.request, "urlopen", side_effect=error):
+        with patch.dict(gflights.os.environ, {"GOOGLE_BROWSER_FALLBACK": "false"}), \
+             patch.object(gflights.urllib.request, "urlopen", side_effect=error):
             with self.assertRaises(gflights.BlockedError):
                 gflights.fetch_gf("GDN", "KIX", "2026-10-21")
 
     def test_google_captcha_body_is_classified_as_block(self):
         response = type("CaptchaResponse", (), {"status": 200, "read": lambda self: b"<html>unusual traffic - captcha</html>"})()
-        with patch.object(gflights.urllib.request, "urlopen") as urlopen:
+        with patch.dict(gflights.os.environ, {"GOOGLE_BROWSER_FALLBACK": "false"}), \
+             patch.object(gflights.urllib.request, "urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value = response
             with self.assertRaises(gflights.BlockedError):
                 gflights.fetch_gf("POZ", "BKK", "2026-09-01")
+
+    def test_scan_queue_prefers_atomic_database_reconciliation(self):
+        monitor = {
+            "id": "monitor-atomic",
+            "filters": {
+                "origins": ["POZ"], "destinations": ["BKK"],
+                "from": "2026-09-01", "to": "2026-09-01", "cabin": "BUSINESS",
+            },
+        }
+        with patch.object(scanner, "api", return_value={"desired_count": 1, "queue_count": 1}) as api:
+            scanner.sync_monitor_scan_items(monitor)
+        self.assertEqual(api.call_count, 1)
+        self.assertEqual(api.call_args.args[:2], ("POST", "rpc/sync_monitor_scan_items"))
+        self.assertEqual(len(api.call_args.kwargs["body"]["p_items"]), 1)
 
     def test_invalid_telegram_feedback_is_rejected_before_database_write(self):
         api_calls = []
@@ -826,6 +873,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("positive_count + positive_delta", migration)
         self.assertIn("negative_count + negative_delta", migration)
         self.assertIn("where score is distinct from public.preference_signal_score", migration)
+
+    def test_atomic_queue_migration_is_idempotent_and_private(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260802000800_atomic_scan_queue.sql").read_text()
+        self.assertIn("pg_advisory_xact_lock", migration)
+        self.assertIn("on conflict do nothing", migration)
+        self.assertIn("return_date is not distinct from", migration)
+        self.assertIn("revoke all on function public.sync_monitor_scan_items", migration)
+        self.assertIn("grant execute on function public.sync_monitor_scan_items(uuid, jsonb) to service_role", migration)
 
     def test_source_structure_errors_are_not_reported_as_google_blocks(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
