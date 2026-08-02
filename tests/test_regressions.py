@@ -287,8 +287,27 @@ class FlightRadarRegressionTests(unittest.TestCase):
             with self.assertRaises(google_browser.BrowserNoFlightsError):
                 google_browser._load_cards(NoFlightPage(), "https://google.test")
 
-    def test_google_generic_empty_state_is_not_a_global_source_failure(self):
+    def test_google_clean_empty_state_is_not_a_source_failure(self):
         class EmptyResultPage:
+            def goto(self, *args, **kwargs): pass
+            def get_by_role(self, role, **kwargs):
+                if role == "heading":
+                    return type("Heading", (), {"wait_for": lambda self, timeout=None: None})()
+                return type("Empty", (), {"count": lambda self: 0})()
+            def locator(self, selector):
+                if selector == "body":
+                    return type("Body", (), {
+                        "inner_text": lambda self, timeout=None:
+                        "Search results No results returned"
+                    })()
+                return type("Empty", (), {"count": lambda self: 0})()
+            def wait_for_timeout(self, _): pass
+
+        with self.assertRaises(google_browser.BrowserNoFlightsError):
+            google_browser._load_cards(EmptyResultPage(), "https://google.test")
+
+    def test_google_error_shell_is_retried_instead_of_marked_as_no_flights(self):
+        class ErrorShellPage:
             def goto(self, *args, **kwargs): pass
             def get_by_role(self, role, **kwargs):
                 if role == "heading":
@@ -303,8 +322,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
                 return type("Empty", (), {"count": lambda self: 0})()
             def wait_for_timeout(self, _): pass
 
-        with self.assertRaises(google_browser.BrowserNoFlightsError):
-            google_browser._load_cards(EmptyResultPage(), "https://google.test")
+        with self.assertRaises(google_browser.BrowserParseError):
+            google_browser._load_cards(ErrorShellPage(), "https://google.test")
 
     def test_no_flights_fallback_is_returned_as_an_empty_result(self):
         with patch.object(gflights, "_fetch_server", side_effect=gflights.SourceParseError("payload moved")), \
@@ -575,6 +594,18 @@ class FlightRadarRegressionTests(unittest.TestCase):
             flight, {"budget_pln": 6000}, market_prices=[3500, 7000, 7600]
         ), 5)
 
+    def test_market_rating_can_downgrade_a_fare_that_is_bad_for_the_route(self):
+        flight = {"airline": "AY", "airline_name": "Finnair", "price_pln": 5000, "duration_h": 14, "stops": 1}
+        self.assertEqual(scanner.score(
+            flight, {"budget_pln": 5000}, market_prices=[3500, 4000, 5000]
+        ), 1)
+
+    def test_priority_bonus_does_not_rescue_a_bad_market_fare(self):
+        flight = {"airline": "EY", "airline_name": "Etihad", "price_pln": 5000, "duration_h": 14, "stops": 1}
+        self.assertEqual(scanner.score(
+            flight, {"budget_pln": 6000}, market_prices=[4000, 4500, 5000]
+        ), 2)
+
     def test_sparse_market_data_does_not_overrate_one_observation(self):
         self.assertIsNone(scanner.market_price_reference([4500, 7000]))
 
@@ -671,6 +702,19 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("🗓 2026-10-22 → 2026-11-06\n", message)
         self.assertIn("🛫 Tam: 17h 40m · 1 przesiadka\n↩️ Powrót: 17h 15m · 1 przesiadka", message)
         self.assertNotIn("17h 40m, 1 przes. · powrót", message)
+
+    def test_telegram_duration_rounding_carries_into_the_next_hour(self):
+        offer = {
+            "route": "GDN → KIX", "cabin": "ECONOMY", "airline_name": "Finnair",
+            "price_pln": 4500, "travel_date": "2026-10-22", "return_date": "2026-11-06",
+            "link": "https://www.google.com/travel/flights", "raw": {
+                "round_trip_verified": True, "outbound_duration_h": 17.999,
+                "outbound_stops": 1, "return_duration_h": 17.25, "return_stops": 1,
+            },
+        }
+        message = scanner.alert_text(offer, 3, "match-1")
+        self.assertIn("🛫 Tam: 18h 00m", message)
+        self.assertNotIn("17h 60m", message)
 
     def test_database_budget_guard_is_part_of_read_policy(self):
         migration = (ROOT / "supabase" / "migrations" / "20260728230000_personal_data_isolation.sql").read_text()

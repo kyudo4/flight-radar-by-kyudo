@@ -555,12 +555,14 @@ def market_price_reference(market_prices):
     rating.
     """
     values = []
+    seen = set()
     for value in market_prices or []:
         try:
             number = float(value)
         except (TypeError, ValueError):
             continue
-        if number > 0:
+        if number > 0 and number not in seen:
+            seen.add(number)
             values.append(number)
     return statistics.median(values) if len(values) >= 3 else None
 
@@ -584,13 +586,18 @@ def market_price_stars(price, market_prices):
 def score(flight, filters, feedback=None, preferences=None, route="", destination="", cabin="", market_prices=None):
     price = flight.get("price_pln") or 999999
     budget = int(filters.get("budget_pln") or 999999)
-    stars = 5 if price <= budget * .55 else 4 if price <= budget * .75 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
-    # A priority carrier is only a small preference bonus, not proof that the
-    # fare is good. The route/cabin market comparison can independently
-    # upgrade a genuinely cheap fare operated by a non-priority airline.
-    if flight.get("airline") in PRIORITY:
-        stars = min(5, stars + 1)
-    stars = max(stars, market_price_stars(price, market_prices))
+    reference = market_price_reference(market_prices)
+    if reference:
+        # When a real route benchmark exists, it is the primary rating. A fare
+        # that fits the user's budget can still be a poor deal for this route.
+        stars = market_price_stars(price, market_prices)
+        ratio = float(price) / reference
+        if flight.get("airline") in PRIORITY and ratio <= 0.90:
+            stars = min(5, stars + 1)
+    else:
+        stars = 5 if price <= budget * .55 else 4 if price <= budget * .75 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
+        if flight.get("airline") in PRIORITY:
+            stars = min(5, stars + 1)
     preferred = {str(value).strip().upper() for value in filters.get("preferred_airlines", []) if str(value).strip()}
     airline_code = str(flight.get("airline") or "").strip().upper()
     airline_name = str(flight.get("airline_name") or "").strip().upper()
@@ -678,6 +685,14 @@ def save_offer(task, flight):
 
 
 def alert_text(offer, stars, match_id):
+    def duration_label(value_minutes=None, value_hours=None):
+        try:
+            total_minutes = round(float(value_minutes)) if value_minutes is not None else round(float(value_hours) * 60)
+        except (TypeError, ValueError):
+            return "—"
+        hours, minutes = divmod(max(0, total_minutes), 60)
+        return "%dh %02dm" % (hours, minutes)
+
     def stop_label(value):
         try:
             count = int(value)
@@ -709,12 +724,12 @@ def alert_text(offer, stars, match_id):
         return_duration = raw.get("return_duration_h") or 0
         outbound_stops = raw.get("outbound_stops", "?")
         return_stops = raw.get("return_stops", "?")
-        travel_quality = "🛫 Tam: %dh %02dm · %s\n↩️ Powrót: %dh %02dm · %s" % (
-            int(outbound_duration), round((outbound_duration % 1) * 60), stop_label(outbound_stops),
-            int(return_duration), round((return_duration % 1) * 60), stop_label(return_stops),
+        travel_quality = "🛫 Tam: %s · %s\n↩️ Powrót: %s · %s" % (
+            duration_label(value_hours=outbound_duration), stop_label(outbound_stops),
+            duration_label(value_hours=return_duration), stop_label(return_stops),
         )
     else:
-        travel_quality = "%dh %02dm · %s" % (duration // 60, duration % 60, stop_label(offer.get("stops", "?")))
+        travel_quality = "%s · %s" % (duration_label(value_minutes=duration), stop_label(offer.get("stops", "?")))
     quality_separator = "\n" if "\n" in travel_quality else " · "
     return ("<b>%s</b>\n🧭 <b>%s</b> · %s\n✈️ %s%s\n💰 <b>%s PLN</b>\n🗓 %s%s%s\n🔗 <a href=\"%s\">Otwórz ofertę</a>" % ("⭐" * stars, route, cabin, airline, aircraft_line, f"{offer.get('price_pln') or 0:,}".replace(",", " "), dates, quality_separator, travel_quality + tag_line, html.escape(link, quote=True)))
 
@@ -800,7 +815,8 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
         old_airline = airline_identity(old_offer)
         old_cabin = str(old_offer.get("cabin") or "").upper().replace("-", "_")
         old_trip = old_offer.get("trip_type") or ("round_trip" if old_offer.get("return_date") else "one_way")
-        if old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value:
+        same_month = not old_offer.get("travel_date") or old_offer.get("travel_date", "")[:7] == task["date"][:7]
+        if old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value and same_month:
             route_airlines.add(old_airline)
             for value in (old_offer.get("price_pln"), old.get("min_price_for_user")):
                 if value is not None:
@@ -926,6 +942,7 @@ def main():
     blocked = False
     executed_count = 0
     source_errors_in_row = 0
+    source_error_routes = set()
     successful_google_tasks = 0
     failed_google_tasks = 0
     source_degraded = False
@@ -970,6 +987,7 @@ def main():
                 log("Pominięto zapytanie po błędzie źródła: %s" % task_errors[-1])
                 source_errors_in_row += 1
                 failed_google_tasks += 1
+                source_error_routes.add((task["origin"], task["dest"]))
                 task_failed = True
             else:
                 successful_google_tasks += 1
@@ -989,7 +1007,7 @@ def main():
                             added, sent = process_candidate(
                                 monitor, task, flight, history_cache[monitor["id"]],
                                 preference_cache[user_id],
-                                market_prices=[item.get("price_pln") for item in flights],
+                                market_prices=[item.get("price_pln") for item in flights if quality(item, monitor.get("filters") or {})],
                             )
                             offers_count += added; sent_count += sent
                         except Exception as exc:
@@ -1004,7 +1022,7 @@ def main():
             if task_failed:
                 retry_at = now + timedelta(hours=1)
                 api("PATCH", "monitor_scan_items", body={"next_scan_at": retry_at.isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
-                if source_errors_in_row >= 3:
+                if source_errors_in_row >= 3 and len(source_error_routes) >= 3:
                     task_errors.append("Google: obwód ochronny po trzech kolejnych błędach źródła")
                     source_degraded = True
                     break

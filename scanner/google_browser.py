@@ -28,6 +28,10 @@ class BrowserNoFlightsError(RuntimeError):
     """Google explicitly rendered a valid page without any flights."""
 
 
+class BrowserTransientEmptyError(RuntimeError):
+    """Google rendered an empty/error shell that needs a retry."""
+
+
 _RUNTIME = None
 _PLAYWRIGHT = None
 _BROWSER = None
@@ -185,11 +189,6 @@ def _wait_for_cards(page, timeout_ms=25000):
     no_flight_markers = (
         "no flights", "no available flights", "no matching flights",
         "couldn't find any flights", "could not find any flights",
-        # Some origin/destination pairs are rendered by Google as the generic
-        # empty-state below (often followed by "Oops, something went wrong")
-        # instead of the usual "No flights" copy.  There are no offer cards
-        # to parse, so this is a valid empty query result—not evidence that
-        # every Google Flights request in the scan is broken.
         "no results returned",
     )
     while time.monotonic() < deadline:
@@ -197,6 +196,9 @@ def _wait_for_cards(page, timeout_ms=25000):
         if labels:
             return labels
         body = _visible_body_text(page)
+        if "no results returned" in body and any(marker in body for marker in (
+                "oops, something went wrong", "something went wrong", "reload")):
+            raise BrowserTransientEmptyError("Google zwrócił niekompletny ekran wyników")
         if any(marker in body for marker in no_flight_markers):
             raise BrowserNoFlightsError("Google nie znalazł lotów")
         page.wait_for_timeout(500)
