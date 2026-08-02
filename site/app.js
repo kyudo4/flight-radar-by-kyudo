@@ -292,6 +292,27 @@
     document.querySelectorAll("[data-action='toggle-user']").forEach(btn => btn.onclick = async () => { const next = btn.dataset.status === "active" ? "suspended" : "active"; const result = await client.rpc("set_profile_status", { target_id: btn.dataset.user, next_status: next }); if (result.error || result.data !== true) alert(result.error?.message || "Nie zmieniono statusu."); else await loadAdmin(); });
     document.querySelectorAll("[data-action='delete-user']").forEach(btn => btn.onclick = async () => { if (!confirm("Usunąć konto, jego monitory i alerty? Tego nie można cofnąć.")) return; const result = await client.rpc("admin_delete_profile", { target_id: btn.dataset.user }); if (result.error || result.data !== true) alert(result.error?.message || "Nie usunięto konta."); else await loadAdmin(); });
     $("inviteButton").onclick = createInvite;
+    $("scanNowButton").onclick = requestImmediateScan;
+  }
+  async function requestImmediateScan() {
+    const button = $("scanNowButton"), output = $("scanNowMessage");
+    button.disabled = true; output.textContent = "Uruchamianie skanu…"; output.className = "message";
+    try {
+      const { data: sessionData, error: sessionError } = await client.auth.getSession();
+      if (sessionError || !sessionData.session?.access_token) throw new Error("Sesja administratora wygasła. Odśwież stronę.");
+      const response = await fetch(`${cfg.supabaseUrl}/functions/v1/admin-scan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: cfg.supabaseAnonKey, Authorization: `Bearer ${sessionData.session.access_token}` },
+        body: "{}"
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Nie udało się uruchomić skanu.");
+      output.textContent = "Skan uruchomiony. Wyniki pojawią się po jego zakończeniu."; output.className = "message good";
+    } catch (error) {
+      output.textContent = error.message || "Nie udało się uruchomić skanu."; output.className = "message";
+    } finally {
+      window.setTimeout(() => { button.disabled = false; }, 4000);
+    }
   }
   async function copyInviteLink(link, button) {
     let copied = false;

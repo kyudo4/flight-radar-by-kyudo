@@ -33,6 +33,11 @@ jej stanu, tokenów Telegrama ani historii alertów.
    `TELEGRAM_CLIENT_ID` i `TELEGRAM_CLIENT_SECRET`. Sekret klienta nie trafia do strony.
    Funkcja ogranicza żądania do `https://kyudo4.github.io`; przy zmianie domeny ustaw
    sekret `APP_ORIGIN` na nowy origin bez ścieżki.
+   Utwórz również funkcję `admin-scan` z pliku `supabase/functions/admin-scan/index.ts`.
+   Ustaw w niej sekrety `GITHUB_ACTIONS_TOKEN` (fine-grained token GitHub tylko dla tego
+   repozytorium, uprawnienie Actions: Read and write), `GITHUB_REPOSITORY` oraz
+   `GITHUB_WORKFLOW_ID=scan.yml`. Token GitHub zostaje wyłącznie w Supabase i nie trafia
+   do strony. Przycisk ręcznego skanu jest dostępny tylko aktywnemu administratorowi.
 4. Ustaw adres projektu i anon key w `site/config.js` na podstawie `site/config.example.js`.
 5. Ustaw sekrety GitHub Actions: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
    `SUPABASE_ANON_KEY` i `TG_BOT_TOKEN`.

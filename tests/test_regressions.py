@@ -481,6 +481,23 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('profile?.role === "admin"', app_js)
         self.assertIn('show("adminView", adminVisible)', app_js)
 
+    def test_admin_can_trigger_a_protected_manual_scan(self):
+        html = (ROOT / "site" / "index.html").read_text()
+        app_js = (ROOT / "site" / "app.js").read_text()
+        function = (ROOT / "supabase" / "functions" / "admin-scan" / "index.ts").read_text()
+        workflow = (ROOT / ".github" / "workflows" / "scan.yml").read_text()
+        self.assertIn('id="scanNowButton"', html)
+        self.assertIn('id="scanNowMessage"', html)
+        self.assertIn('requestImmediateScan', app_js)
+        self.assertIn("functions/v1/admin-scan", app_js)
+        self.assertIn("profile?.role !== 'admin'", function)
+        self.assertIn("profile?.status !== 'active'", function)
+        self.assertIn("GITHUB_ACTIONS_TOKEN", function)
+        self.assertIn("/actions/workflows/${workflow}/dispatches", function)
+        self.assertNotIn("'Access-Control-Allow-Origin': '*'", function)
+        self.assertIn("workflow_dispatch", workflow)
+        self.assertIn("FORCE_SCAN", workflow)
+
     def test_telegram_bootstrap_password_fits_bcrypt_limit(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
         self.assertEqual(source.count("crypto.randomUUID().replaceAll('-', '')"), 2)
