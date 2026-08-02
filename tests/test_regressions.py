@@ -628,6 +628,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
         self.assertIn('app.js?v=20260802-7', html)
+        self.assertIn('styles.css?v=20260802-5', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
         app = (ROOT / "site" / "app.js").read_text()
