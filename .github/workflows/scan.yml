@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: false
+      full_queue_scan:
+        description: "Jednorazowo przejdź przez całą bieżącą kolejkę (wysokie obciążenie źródła)"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: friends-backend
@@ -41,9 +46,12 @@ jobs:
           MAX_STANDARD_QUERIES: "240"
           MAX_FIRST_QUERIES: "12"
           MAX_STANDARD_CEILING: "400"
-          MAX_FIRST_CEILING: "24"
+          MAX_FIRST_CEILING: "40"
           GOOGLE_REQUEST_DELAY_SECONDS: "1.5"
           GOOGLE_BROWSER_QUERY_LIMIT: "80"
-          FORCE_SCAN: ${{ inputs.force_scan == true && 'true' || 'false' }}
+          FULL_QUEUE_SCAN: ${{ inputs.full_queue_scan == true && 'true' || 'false' }}
+          FULL_QUEUE_STANDARD_LIMIT: "400"
+          FULL_QUEUE_FIRST_LIMIT: "40"
+          FORCE_SCAN: ${{ (inputs.force_scan == true || inputs.full_queue_scan == true) && 'true' || 'false' }}
           RESERVED_RUN_ID: ${{ inputs.reserved_run_id || '' }}
         run: python scanner/friends_scanner.py

@@ -34,6 +34,9 @@ MAX_AIRPORTS_PER_SIDE = 5
 MAX_MONITOR_COMBINATIONS = 5000
 SCAN_INTERVAL_HOURS = 6
 FORCE_SCAN = os.environ.get("FORCE_SCAN", "false").lower() == "true"
+FULL_QUEUE_SCAN = os.environ.get("FULL_QUEUE_SCAN", "false").lower() == "true"
+FULL_QUEUE_STANDARD_LIMIT = max(1, min(1000, int(os.environ.get("FULL_QUEUE_STANDARD_LIMIT", "400"))))
+FULL_QUEUE_FIRST_LIMIT = max(1, min(100, int(os.environ.get("FULL_QUEUE_FIRST_LIMIT", "40"))))
 PROCESS_TELEGRAM_ONLY = os.environ.get("PROCESS_TELEGRAM_ONLY", "false").lower() == "true"
 RESERVED_RUN_ID = os.environ.get("RESERVED_RUN_ID", "").strip()
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))
@@ -288,6 +291,11 @@ def adaptive_query_limits():
     schodzi co najmniej do bezpiecznego poziomu. Dzięki temu limit nie jest
     bezmyślnie podbijany po blokadzie i nie ma ponawiania zablokowanego żądania.
     """
+    if FULL_QUEUE_SCAN:
+        # Jednorazowe przejście administracyjne nie korzysta z rampowania ani
+        # z poprzedniego limitu po blokadzie. Nadal obowiązuje bezpieczne
+        # zatrzymanie po CAPTCHA/błędzie struktury w pętli pobierania.
+        return {"standard": FULL_QUEUE_STANDARD_LIMIT, "first": FULL_QUEUE_FIRST_LIMIT}
     limits = {"standard": INITIAL_STANDARD, "first": INITIAL_FIRST}
     try:
         recent = api("GET", "scan_runs", params={
