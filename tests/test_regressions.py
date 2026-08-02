@@ -97,6 +97,39 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(card["airline_name"], "KLM and Air France")
         self.assertIn("6:05 AM", card["departure"])
 
+    def test_rendered_fallback_retries_a_transient_empty_page(self):
+        class FakeFirst:
+            def __init__(self, parent): self.parent = parent
+            def wait_for(self, timeout=None):
+                self.parent.waits += 1
+                if self.parent.waits == 1:
+                    raise TimeoutError("temporary empty render")
+
+        class FakeLinks:
+            def __init__(self): self.waits = 0; self.first = FakeFirst(self)
+            def count(self): return 1
+            def nth(self, _): return self
+            def get_attribute(self, _):
+                return ("From 4,500 Polish zlotys. 1 stop flight with Qatar Airways. "
+                        "Leaves Poznan Airport at 10:00 AM and arrives at Bangkok Airport at "
+                        "8:00 AM. Total duration 14 hr. Select flight")
+
+        class FakePage:
+            def __init__(self): self.links = FakeLinks(); self.gotos = 0
+            def goto(self, *args, **kwargs): self.gotos += 1
+            def get_by_role(self, role, **kwargs):
+                if role == "heading":
+                    return type("Heading", (), {"wait_for": lambda self, timeout=None: None})()
+                return self.links
+            def locator(self, _):
+                return type("Body", (), {"inner_text": lambda self, timeout=None: "Loading results"})()
+            def wait_for_timeout(self, _): pass
+
+        page = FakePage()
+        cards = google_browser._load_cards(page, "https://google.test")
+        self.assertEqual(page.gotos, 2)
+        self.assertEqual(cards[0]["price_pln"], 4500)
+
     def test_google_uses_rendered_fallback_when_server_payload_moves(self):
         rendered = [{
             "airline_name": "Qatar Airways", "price_pln": 4300,

@@ -146,38 +146,55 @@ def _page():
 
 
 def _load_cards(page, url, returning=False):
-    page.goto(url, wait_until="domcontentloaded", timeout=45000)
-    heading = "Returning flights" if returning else "Search results"
-    try:
-        page.get_by_role("heading", name=heading, exact=True).wait_for(timeout=25000)
-    except Exception:
-        pass
-    links = page.get_by_role("link", name=re.compile(r"Select flight", re.I))
-    try:
-        links.first.wait_for(timeout=25000)
-    except Exception as exc:
-        body = " ".join(page.locator("body").inner_text(timeout=5000).lower().split())
-        if any(marker in body for marker in (
-                "unusual traffic", "not a robot", "captcha", "before you continue")):
-            raise BrowserBlockedError("Google pokazał blokadę w awaryjnym Chrome") from exc
-        raise BrowserParseError("Awaryjny Chrome nie znalazł kart lotów") from exc
-    cards = []
-    seen = set()
-    for index in range(min(links.count(), 120)):
-        label = links.nth(index).get_attribute("aria-label") or ""
-        if not label or label in seen:
-            continue
-        seen.add(label)
+    """Load cards with one clean retry for Google's occasional empty render."""
+    last_error = None
+    for attempt in range(2):
         try:
-            cards.append(parse_card_label(label))
-        except BrowserParseError:
-            continue
-    if not cards:
-        raise BrowserParseError("Google zwrócił karty bez pełnej ceny/czasu/przesiadek")
-    return cards
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            heading = "Returning flights" if returning else "Search results"
+            try:
+                page.get_by_role("heading", name=heading, exact=True).wait_for(timeout=25000)
+            except Exception:
+                pass
+            links = page.get_by_role("link", name=re.compile(r"Select flight", re.I))
+            links.first.wait_for(timeout=25000)
+            cards = []
+            seen = set()
+            for index in range(min(links.count(), 120)):
+                label = links.nth(index).get_attribute("aria-label") or ""
+                if not label or label in seen:
+                    continue
+                seen.add(label)
+                try:
+                    cards.append(parse_card_label(label))
+                except BrowserParseError:
+                    continue
+            if cards:
+                return cards
+            last_error = BrowserParseError(
+                "Google zwrócił karty bez pełnej ceny/czasu/przesiadek"
+            )
+        except BrowserBlockedError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            try:
+                body = " ".join(page.locator("body").inner_text(timeout=5000).lower().split())
+            except Exception:
+                body = ""
+            if any(marker in body for marker in (
+                    "unusual traffic", "not a robot", "captcha", "before you continue")):
+                raise BrowserBlockedError("Google pokazał blokadę w awaryjnym Chrome") from exc
+        if attempt == 0:
+            page.wait_for_timeout(1800)
+    direction = "powrotnych" if returning else "wylotowych"
+    raise BrowserParseError(
+        "Awaryjny Chrome po dwóch próbach nie znalazł kart %s: %s"
+        % (direction, str(last_error)[:120])
+    ) from last_error
 
 
-def _outbound_candidates(cards, maximum=2):
+def _outbound_candidates(cards, maximum=3):
     """Pick complementary outbound choices without exploding browser traffic."""
     if not cards:
         return []
@@ -190,8 +207,9 @@ def _outbound_candidates(cards, maximum=2):
             item["price_pln"],
         ),
     )
+    shortest = min(cards, key=lambda item: (item["duration_h"], item["price_pln"], item["stops"]))
     selected = []
-    for card in (practical, cheapest):
+    for card in (practical, cheapest, shortest):
         if card not in selected:
             selected.append(card)
         if len(selected) >= maximum:
@@ -225,7 +243,11 @@ def fetch_rendered(url, return_date=None):
         return outbound_cards
 
     combined = []
-    for outbound in _outbound_candidates(outbound_cards):
+    for candidate_index, outbound in enumerate(_outbound_candidates(outbound_cards)):
+        # Two complementary outbound choices provide airline variety.  A
+        # third is attempted only when both produced no valid return.
+        if candidate_index >= 2 and combined:
+            break
         # Reload the original list so every candidate is selected from a clean
         # state.  Exact accessible name avoids brittle CSS classes.
         _load_cards(page, url)
