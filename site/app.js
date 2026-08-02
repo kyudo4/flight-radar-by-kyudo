@@ -9,7 +9,7 @@
   const OFFER_PAGE_SIZE = 40;
   const MAX_MONITOR_COMBINATIONS = 5000;
 
-  const AIRPORT_OVERRIDES = { GDN: "Gdańsk", WAW: "Warszawa", POZ: "Poznań", OSL: "Oslo", ARN: "Sztokholm", CPH: "Kopenhaga", VIE: "Wiedeń", BUD: "Budapeszt", MXP: "Mediolan", IST: "Stambuł", BKK: "Bangkok", SIN: "Singapur", KUL: "Kuala Lumpur", HKG: "Hongkong", HAN: "Hanoi", SGN: "Ho Chi Minh", HND: "Tokio (Haneda)", NRT: "Tokio (Narita)", ICN: "Seul" };
+  const AIRPORT_OVERRIDES = { GDN: "Gdańsk", WAW: "Warszawa", POZ: "Poznań", OSL: "Oslo", ARN: "Sztokholm", CPH: "Kopenhaga", VIE: "Wiedeń", BUD: "Budapeszt", MXP: "Mediolan", IST: "Stambuł", BKK: "Bangkok", SIN: "Singapur", KUL: "Kuala Lumpur", HKG: "Hongkong", HAN: "Hanoi", SGN: "Ho Chi Minh", HND: "Tokio", NRT: "Tokio", ICN: "Seul" };
   const AIRPORTS = { ...AIRPORT_OVERRIDES };
   const CABINS = { BUSINESS: "Business", FIRST: "First", PREMIUM_ECONOMY: "Premium Economy", "PREMIUM-ECONOMY": "Premium Economy", ECONOMY: "Economy" };
   const TELEGRAM_LEVELS = { 3: "Wszystkie powiadomienia", 4: "Interesujące", 5: "Najlepsze okazje" };
@@ -33,7 +33,8 @@
   };
   const todayIso = () => isoDate();
   const airportName = value => AIRPORTS[String(value || "").toUpperCase()] || String(value || "");
-  const routeName = value => String(value || "").split(/\s*→\s*/).map(airportName).join(" → ");
+  const airportLabel = value => { const code = String(value || "").trim().toUpperCase(); const city = airportName(code); return city && city.toUpperCase() !== code ? `${city} (${code})` : code; };
+  const routeName = value => String(value || "").split(/\s*→\s*/).map(airportLabel).join(" → ");
   const monitorCabins = filters => Array.isArray(filters?.cabins) && filters.cabins.length ? filters.cabins : (filters?.cabin ? [filters.cabin] : []);
   const telegramLevel = value => TELEGRAM_LEVELS[Number(value)] || "Nieustawiony";
   const offerData = match => { const relation = match?.flight_offers; return Array.isArray(relation) ? (relation[0] || {}) : (relation || {}); };
@@ -139,7 +140,7 @@
     const f = m.filters || {}, r = m.telegram_rules || {};
     const cabins = monitorCabins(f);
     const cabinLabel = cabins.map(cabin => CABINS[cabin] || cabin).join(", ");
-    const route = `${(f.origins || []).map(airportName).join(", ")} → ${(f.destinations || []).map(airportName).join(", ")}`;
+    const route = `${(f.origins || []).map(airportLabel).join(", ")} → ${(f.destinations || []).map(airportLabel).join(", ")}`;
     const nextScan = m.status === "active" ? `Następny skan: ${dateTimeFmt(m.next_scan_at)}` : "Skan wstrzymany";
     const airlineRules = [(f.preferred_airlines || []).length ? `Preferowane: ${(f.preferred_airlines || []).join(", ")}` : "", (f.excluded_airlines || []).length ? `Wykluczone: ${(f.excluded_airlines || []).join(", ")}` : ""].filter(Boolean).join(" · ");
     const durationLabel = f.max_duration_h ? `maks. ${esc(f.max_duration_h)}h` : "bez limitu czasu";

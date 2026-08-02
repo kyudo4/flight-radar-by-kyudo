@@ -728,6 +728,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             },
         }
         message = scanner.alert_text(offer, 3, "match-1")
+        self.assertIn("Gdańsk (GDN) → Osaka (KIX)", message)
         self.assertIn("🗓 2026-10-22 → 2026-11-06\n", message)
         self.assertIn("🛫 Tam: 17h 40m · 1 przesiadka\n↩️ Powrót: 17h 15m · 1 przesiadka", message)
         self.assertNotIn("17h 40m, 1 przes. · powrót", message)
@@ -1066,6 +1067,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_offer_search_includes_city_names(self):
         app = (ROOT / "site" / "app.js").read_text()
         self.assertIn('${offer.route || ""} ${routeName(offer.route)}', app)
+        self.assertIn("const airportLabel =", app)
+        self.assertIn("map(airportLabel)", app)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1279,7 +1282,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260803-14', html)
+        self.assertIn('app.js?v=20260803-15', html)
         self.assertIn('styles.css?v=20260803-9', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):

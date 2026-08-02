@@ -50,6 +50,13 @@ PRICE_HISTORY_LAST = {}
 STALE_SCHEMA_SUPPORTED = None
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
 AIRPORTS_FILE = Path(__file__).resolve().parents[1] / "site" / "airports.json"
+AIRPORT_NAME_OVERRIDES = {
+    "GDN": "Gdańsk", "WAW": "Warszawa", "POZ": "Poznań", "OSL": "Oslo",
+    "ARN": "Sztokholm", "CPH": "Kopenhaga", "VIE": "Wiedeń", "BUD": "Budapeszt",
+    "MXP": "Mediolan", "IST": "Stambuł", "BKK": "Bangkok", "SIN": "Singapur",
+    "KUL": "Kuala Lumpur", "HKG": "Hongkong", "HAN": "Hanoi", "SGN": "Ho Chi Minh",
+    "HND": "Tokio", "NRT": "Tokio", "ICN": "Seul",
+}
 
 
 def load_airport_codes():
@@ -60,6 +67,27 @@ def load_airport_codes():
 
 
 VALID_AIRPORT_CODES = load_airport_codes()
+
+
+def load_airport_names():
+    try:
+        data = json.loads(AIRPORTS_FILE.read_text(encoding="utf-8"))
+        return {str(code).upper(): str(name).strip() for code, name in data.items() if str(name).strip()}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+AIRPORT_NAMES = load_airport_names()
+
+
+def airport_label(value):
+    code = str(value or "").strip().upper()
+    city = AIRPORT_NAME_OVERRIDES.get(code) or AIRPORT_NAMES.get(code)
+    return "%s (%s)" % (city, code) if city and city.upper() != code else code
+
+
+def route_label(value):
+    return " → ".join(airport_label(part) for part in str(value or "").split("→"))
 
 
 def log(text):
@@ -765,7 +793,7 @@ def alert_text(offer, stars, match_id):
 
     duration = offer.get("duration_minutes") or 0
     raw = offer.get("raw") if isinstance(offer.get("raw"), dict) else {}
-    route = html.escape(str(offer.get("route", "")), quote=True)
+    route = html.escape(route_label(offer.get("route", "")), quote=True)
     cabin = html.escape(str(offer.get("cabin", "")), quote=True)
     airline = html.escape(str(offer.get("airline_name", "")), quote=True)
     aircraft = html.escape(str(offer.get("aircraft", "")), quote=True)
