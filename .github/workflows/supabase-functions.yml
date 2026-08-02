@@ -28,9 +28,11 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
         run: |
           test -n "$SUPABASE_ACCESS_TOKEN" || (echo "Missing SUPABASE_ACCESS_TOKEN secret" && exit 1)
           test -n "$SUPABASE_PROJECT_REF" || (echo "Missing SUPABASE_PROJECT_REF secret" && exit 1)
+          test -n "$TG_BOT_TOKEN" || (echo "Missing TG_BOT_TOKEN secret" && exit 1)
       - name: Deploy Telegram authentication
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -41,3 +43,33 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: supabase functions deploy admin-scan --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+      - name: Configure Telegram webhook secrets
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+        run: |
+          WEBHOOK_SECRET="$(printf '%s' "$TG_BOT_TOKEN" | sha256sum | cut -d ' ' -f 1)"
+          supabase secrets set TG_BOT_TOKEN="$TG_BOT_TOKEN" TELEGRAM_WEBHOOK_SECRET="$WEBHOOK_SECRET" --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Deploy Telegram feedback webhook
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: supabase functions deploy telegram-feedback-webhook --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+      - name: Register and verify Telegram feedback webhook
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+        run: |
+          WEBHOOK_SECRET="$(printf '%s' "$TG_BOT_TOKEN" | sha256sum | cut -d ' ' -f 1)"
+          WEBHOOK_URL="https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/telegram-feedback-webhook"
+          TELEGRAM_RESPONSE="$(curl --fail --silent --show-error --retry 3 \
+            -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/setWebhook" \
+            -H 'Content-Type: application/json' \
+            --data "$(jq -cn --arg url "$WEBHOOK_URL" --arg secret "$WEBHOOK_SECRET" \
+              '{url:$url,secret_token:$secret,allowed_updates:["callback_query"],drop_pending_updates:false,max_connections:10}')")"
+          export TELEGRAM_RESPONSE WEBHOOK_URL
+          python3 -c 'import json,os,sys; data=json.loads(os.environ["TELEGRAM_RESPONSE"]); sys.exit(0 if data.get("ok") else 1)'
+          INFO="$(curl --fail --silent --show-error --retry 3 "https://api.telegram.org/bot${TG_BOT_TOKEN}/getWebhookInfo")"
+          export INFO
+          python3 -c 'import json,os,sys; data=json.loads(os.environ["INFO"]).get("result",{}); blocked=bool(data.get("last_error_date")) and int(data.get("pending_update_count") or 0)>0; sys.exit(0 if data.get("url")==os.environ["WEBHOOK_URL"] and not blocked else 1)'

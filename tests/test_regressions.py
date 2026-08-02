@@ -14,6 +14,7 @@ import gflights
 import google_browser
 import google_parser
 import rss
+import telegram_feedback
 import telegram_io
 
 
@@ -621,6 +622,22 @@ class FlightRadarRegressionTests(unittest.TestCase):
         duplicated_card = [offers[0], offers[1], dict(offers[1])]
         self.assertIsNone(scanner.market_price_reference(duplicated_card))
 
+    def test_live_offer_and_its_stored_history_are_one_market_observation(self):
+        task = {"origin": "GDN", "dest": "KIX", "date": "2026-10-25", "cabin": "economy", "trip_type": "one_way"}
+        current = {"airline": "AY", "price_pln": 4500, "departure": "09:40", "duration_h": 19.17, "stops": 1}
+        other = {"airline": "LH", "price_pln": 7000, "departure": "11:00", "duration_h": 18, "stops": 1}
+        live = scanner.market_observations(task, [current, other], {})
+        history = {"price_pln": 4500, "_market_key": scanner.offer_fingerprint(task, current)}
+        self.assertIsNone(scanner.market_price_reference(live + [history]))
+        self.assertEqual(scanner.score(current, {"budget_pln": 6000}, market_prices=live + [history]), 4)
+
+    def test_round_trip_rating_penalizes_a_long_return_leg(self):
+        flight = {
+            "airline": "AY", "price_pln": 4500, "duration_h": 15, "outbound_duration_h": 15,
+            "return_duration_h": 25, "stops": 1, "outbound_stops": 1, "return_stops": 1,
+        }
+        self.assertEqual(scanner.score(flight, {"budget_pln": 6000}), 3)
+
     def test_durable_bad_airline_signal_applies_across_monitors_and_dates(self):
         flight = {"airline": "CA", "airline_name": "Air China", "price_pln": 5000, "duration_h": 14, "stops": 1}
         filters = {"budget_pln": 6000}
@@ -1082,14 +1099,53 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_telegram_feedback_has_fast_separate_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "telegram-feedback.yml").read_text()
+        deployment = (ROOT / ".github" / "workflows" / "supabase-functions.yml").read_text()
+        webhook = (ROOT / "supabase" / "functions" / "telegram-feedback-webhook" / "index.ts").read_text()
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
-        self.assertIn('cron: "*/5 * * * *"', workflow)
+        self.assertIn('cron: "23 * * * *"', workflow)
         self.assertIn('group: friends-telegram-feedback', workflow)
         self.assertNotIn('group: friends-backend', workflow)
         self.assertIn("python scanner/telegram_feedback.py", workflow)
+        self.assertIn("telegram-feedback-webhook", deployment)
+        self.assertIn("setWebhook", deployment)
+        self.assertIn("TELEGRAM_WEBHOOK_SECRET", deployment)
+        self.assertIn("x-telegram-bot-api-secret-token", webhook)
+        self.assertIn(".eq('id', matchId).eq('user_id', connection.data.user_id)", webhook)
+        self.assertNotIn("Access-Control-Allow-Origin", webhook)
         self.assertIn("telegram_io.process_link_updates(api, telegram, TG_TOKEN)", scanner_source)
         main_source = scanner_source.split("def main():", 1)[1]
         self.assertNotIn("process_link_updates()", main_source)
+
+    def test_telegram_feedback_polling_is_only_a_webhook_fallback(self):
+        with patch.object(telegram_feedback.telegram_io, "telegram", return_value={
+            "ok": True, "result": {
+                "url": "https://example.supabase.co/functions/v1/telegram-feedback-webhook",
+                "last_error_date": 1,
+                "last_error_message": "stale error",
+                "pending_update_count": 0,
+            }
+        }), patch.object(telegram_feedback.telegram_io, "process_link_updates") as polling:
+            telegram_feedback.main()
+        polling.assert_not_called()
+
+        with patch.object(telegram_feedback.telegram_io, "telegram", return_value={
+            "ok": True, "result": {"url": ""}
+        }), patch.object(telegram_feedback.telegram_io, "process_link_updates") as polling:
+            telegram_feedback.main()
+        polling.assert_called_once_with()
+
+    def test_telegram_feedback_reports_an_active_delivery_backlog(self):
+        with patch.object(telegram_feedback.telegram_io, "telegram", return_value={
+            "ok": True, "result": {
+                "url": "https://example.supabase.co/functions/v1/telegram-feedback-webhook",
+                "last_error_date": 1,
+                "last_error_message": "delivery failed",
+                "pending_update_count": 2,
+            }
+        }), patch.object(telegram_feedback.telegram_io, "process_link_updates") as polling:
+            with self.assertRaisesRegex(RuntimeError, "delivery failed"):
+                telegram_feedback.main()
+        polling.assert_not_called()
 
     def test_telegram_auth_is_origin_limited_and_rate_limited(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()

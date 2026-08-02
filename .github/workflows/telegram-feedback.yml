@@ -2,7 +2,9 @@ name: Flight Radar Telegram feedback
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    # Reakcje obsługuje webhook natychmiast. Ten przebieg jest cogodzinnym
+    # health-checkiem i awaryjnym pollingiem, gdy webhook nie jest ustawiony.
+    - cron: "23 * * * *"
   workflow_dispatch:
 
 concurrency:

@@ -456,6 +456,15 @@ def offer_fingerprint(task, flight):
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
+def market_observations(task, flights, filters):
+    """Return quality fares with a stable identity shared with stored offers."""
+    return [
+        {**flight, "_market_key": offer_fingerprint(task, flight)}
+        for flight in flights
+        if quality(flight, filters)
+    ]
+
+
 def quality(flight, filters):
     trip = trip_type(filters)
     if trip == "round_trip" and not flight.get("round_trip_verified", False):
@@ -646,7 +655,12 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
     airline_name = str(flight.get("airline_name") or "").strip().upper()
     if preferred and any(value == airline_code or value in airline_name for value in preferred):
         stars = min(5, stars + 1)
-    if flight.get("duration_h") and flight["duration_h"] > 20:
+    scored_durations = [
+        flight.get("duration_h"),
+        flight.get("outbound_duration_h"),
+        flight.get("return_duration_h"),
+    ]
+    if any(float(value) > 20 for value in scored_durations if value is not None):
         stars = max(1, stars - 1)
     for verdict in feedback or []:
         if verdict == "buy": stars = min(5, stars + 1)
@@ -660,7 +674,7 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
 def fetch_existing(monitor_id):
     return fetch_all_rows("user_matches", {
         "monitor_id": "eq." + monitor_id,
-        "select": "id,offer_id,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln)",
+        "select": "id,offer_id,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(fingerprint,route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln)",
         "order": "updated_at.asc,id.asc",
     })
 
@@ -869,7 +883,7 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
             if historical_price is not None:
                 route_prices.append({
                     "price_pln": historical_price,
-                    "_market_key": "history:%s" % (old.get("offer_id") or old.get("id") or "unknown"),
+                    "_market_key": old_offer.get("fingerprint") or "history:%s" % (old.get("offer_id") or old.get("id") or "unknown"),
                 })
         if old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value and old_offer.get("return_date") == return_date and old_airline == airline:
             if old.get("feedback"):
@@ -1059,7 +1073,7 @@ def main():
                             added, sent = process_candidate(
                                 monitor, task, flight, history_cache[monitor["id"]],
                                 preference_cache[user_id],
-                                market_prices=[item for item in flights if quality(item, monitor.get("filters") or {})],
+                                market_prices=market_observations(task, flights, monitor.get("filters") or {}),
                             )
                             offers_count += added; sent_count += sent
                         except Exception as exc:
