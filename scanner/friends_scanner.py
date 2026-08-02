@@ -40,6 +40,8 @@ FULL_QUEUE_FIRST_LIMIT = max(1, min(100, int(os.environ.get("FULL_QUEUE_FIRST_LI
 PROCESS_TELEGRAM_ONLY = os.environ.get("PROCESS_TELEGRAM_ONLY", "false").lower() == "true"
 RESERVED_RUN_ID = os.environ.get("RESERVED_RUN_ID", "").strip()
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))
+MAX_SCAN_RUNTIME_SECONDS = max(60, min(21600, int(os.environ.get("MAX_SCAN_RUNTIME_SECONDS", "3000"))))
+PROGRESS_UPDATE_EVERY = max(1, min(50, int(os.environ.get("SCAN_PROGRESS_EVERY", "5"))))
 FETCH_RETRIES = 2
 PREFERENCE_FETCH_RETRIES = 3
 STALE_AFTER_HOURS = 24
@@ -61,6 +63,18 @@ VALID_AIRPORT_CODES = load_airport_codes()
 
 def log(text):
     print("[%s] %s" % (datetime.utcnow().isoformat(timespec="seconds"), text))
+
+
+def update_scan_progress(run_id, query_count, offer_count):
+    """Expose bounded progress without making a failed status write fatal."""
+    try:
+        api("PATCH", "scan_runs", body={
+            "query_count": query_count,
+            "offer_count": offer_count,
+            "status": "running",
+        }, params={"id": "eq." + run_id})
+    except Exception as exc:
+        log("Nie udało się zapisać postępu skanu: %s" % str(exc)[:120])
 
 
 def api(method, path, body=None, params=None):
@@ -853,8 +867,10 @@ def main():
     source_errors_in_row = 0
     source_degraded = False
     source_capacity_reached = False
+    runtime_limit_reached = False
     history_cache = {}
     preference_cache = {}
+    scan_started_monotonic = time.monotonic()
     try:
         # Preferencje są częścią reguł alertu. Jeżeli baza nie pozwala ich
         # odczytać, kończymy przed pierwszym zapytaniem Google zamiast oceniać
@@ -862,6 +878,13 @@ def main():
         for user_id in sorted({monitor["user_id"] for monitor in active}):
             preference_cache[user_id] = fetch_preferences(user_id)
         for task in tasks:
+            if time.monotonic() - scan_started_monotonic >= MAX_SCAN_RUNTIME_SECONDS:
+                task_errors.append(
+                    "Skan zatrzymany po osiągnięciu limitu czasu; pozostałe pozycje wrócą w następnym przebiegu"
+                )
+                runtime_limit_reached = True
+                log(task_errors[-1])
+                break
             executed_count += 1
             task_failed = False
             try:
@@ -922,6 +945,8 @@ def main():
             else:
                 api("PATCH", "monitor_scan_items", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
                 api("PATCH", "monitors", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["monitor_ids"])})
+            if executed_count % PROGRESS_UPDATE_EVERY == 0:
+                update_scan_progress(run["id"], executed_count, offers_count)
         # RSS nie zużywa limitu zapytań Google, ale przechodzi ten sam filtr
         # dat, klasy, trasy i osobnych reguł Telegrama.
         rss_active = [m for m in active if trip_type(m.get("filters") or {}) == "one_way"]
@@ -940,7 +965,7 @@ def main():
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
-        final_status = "blocked" if blocked else ("error" if source_degraded else ("partial" if task_errors or source_capacity_reached else "ok"))
+        final_status = "blocked" if blocked else ("error" if source_degraded else ("partial" if task_errors or source_capacity_reached or runtime_limit_reached else "ok"))
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": final_status, "blocked": blocked, "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
         log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
         if blocked:

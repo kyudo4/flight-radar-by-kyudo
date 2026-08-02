@@ -83,6 +83,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(flights[0]["stops"], 0)
         self.assertEqual(flights[0]["airline_name"], "Qatar Airways")
 
+    def test_google_parser_finds_groups_after_payload_path_moves(self):
+        segment = [None, None, "Qatar", "POZ", "Poznań Airport", "Bangkok", "BKK", None,
+                   [6], None, [8, 30], 150, [], 1, "", [], 3, "A350", None, 0,
+                   [2026, 9, 1], [2026, 9, 1]]
+        groups = [[["business", ["Qatar Airways"], [segment]], [[0, 4500]]]]
+        payload = [None, None, None, None, None, None, None, [groups]]
+        html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+        flights = google_parser.parse(html)
+        self.assertEqual(flights[0]["price_pln"], 4500)
+
     def test_rendered_google_card_parser_uses_accessible_flight_data(self):
         label = (
             "From 6,653 Polish zlotys round trip total. 2 stops flight with KLM and Air France. "
@@ -836,6 +846,15 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("Przerwano Google po wykryciu blokady", source)
         self.assertIn("break\n            except Exception", source)
 
+    def test_scan_has_progress_and_runtime_guards(self):
+        source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        workflow = (ROOT / ".github" / "workflows" / "scan.yml").read_text()
+        self.assertIn("MAX_SCAN_RUNTIME_SECONDS", source)
+        self.assertIn("update_scan_progress", source)
+        self.assertIn("runtime_limit_reached", source)
+        self.assertIn("timeout-minutes: 60", workflow)
+        self.assertIn('MAX_SCAN_RUNTIME_SECONDS: "3000"', workflow)
+
     def test_telegram_feedback_has_fast_separate_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "telegram-feedback.yml").read_text()
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
@@ -922,6 +941,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("workflow_dispatch", workflow)
         self.assertIn("reserved_run_id:", workflow)
         self.assertIn("FORCE_SCAN", workflow)
+
+    def test_supabase_functions_have_a_pinned_deployment_workflow(self):
+        workflow = (ROOT / ".github" / "workflows" / "supabase-functions.yml").read_text()
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn('"supabase/functions/**"', workflow)
+        self.assertIn("SUPABASE_ACCESS_TOKEN", workflow)
+        self.assertIn("SUPABASE_PROJECT_REF", workflow)
+        self.assertIn("functions deploy telegram-auth", workflow)
+        self.assertIn("functions deploy admin-scan", workflow)
+        self.assertIn("SUPABASE_ACCESS_TOKEN", readme)
 
     def test_round_trip_and_scan_limits_are_consistent_across_layers(self):
         app = (ROOT / "site" / "app.js").read_text()

@@ -7,6 +7,7 @@ payload is both faster and less fragile than pretending an empty page means
 """
 
 import json
+from collections import deque
 from datetime import datetime
 
 from selectolax.lexbor import LexborHTMLParser
@@ -94,6 +95,57 @@ def _split_round_trip(segments, origin, destination, return_date):
     return segments, [], False
 
 
+def _looks_like_group(value):
+    """Recognize a flight-group list without relying on one payload index."""
+    if not isinstance(value, list) or not value:
+        return False
+    checked = 0
+    valid = 0
+    for row in value[:12]:
+        checked += 1
+        if not isinstance(row, list) or len(row) < 2:
+            continue
+        flight = row[0]
+        price = row[1]
+        if (isinstance(flight, list) and len(flight) > 2
+                and isinstance(flight[2], list)
+                and isinstance(price, list)):
+            valid += 1
+    return valid > 0 and valid >= max(1, checked // 3)
+
+
+def _find_groups(payload):
+    """Find flight groups across Google payload layout revisions.
+
+    The server response has moved the useful list several times. The legacy
+    path remains preferred, while bounded recursive discovery supports a
+    moved list and still rejects a genuinely malformed response.
+    """
+    if not isinstance(payload, list):
+        raise GoogleParseError("Nieprawidłowa struktura danych lotów Google")
+
+    if len(payload) > 3 and payload[3] is not None:
+        legacy = payload[3]
+        if isinstance(legacy, list) and (not legacy or legacy == [[]]):
+            raise GoogleNoFlights("Google nie znalazł lotów")
+        if isinstance(legacy, list) and legacy and _looks_like_group(legacy[0]):
+            return legacy[0]
+
+    queue = deque([(payload, 0)])
+    visited = 0
+    while queue and visited < 10000:
+        value, depth = queue.popleft()
+        visited += 1
+        if depth > 8 or not isinstance(value, list):
+            continue
+        if _looks_like_group(value):
+            return value
+        for child in value[:80]:
+            if isinstance(child, list):
+                queue.append((child, depth + 1))
+    raise GoogleParseError("Nieprawidłowa struktura danych lotów Google")
+
+
 def parse(html, origin=None, destination=None, return_date=None):
     script = _script_text(html)
     try:
@@ -102,12 +154,7 @@ def parse(html, origin=None, destination=None, return_date=None):
     except (IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise GoogleParseError("Nie można odczytać danych lotów Google") from exc
 
-    try:
-        groups = payload[3][0]
-    except (IndexError, TypeError) as exc:
-        raise GoogleParseError("Nieprawidłowa struktura danych lotów Google") from exc
-    if not groups:
-        raise GoogleNoFlights("Google nie znalazł lotów")
+    groups = _find_groups(payload)
 
     flights = []
     for row in groups:

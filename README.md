@@ -58,6 +58,10 @@ jej stanu, tokenów Telegrama ani historii alertów.
    sprawdzenia dostarczenia wiadomości administratorowi.
 10. Workflow `Flight Radar retention cleanup` uruchamia cotygodniowe sprzątanie historii
     cen, wygasłych monitorów, starych skanów i zaproszeń.
+11. Workflow `Deploy Flight Radar Supabase functions` publikuje zmiany funkcji
+    `telegram-auth` i `admin-scan`. W GitHub Secrets muszą być ustawione
+    `SUPABASE_ACCESS_TOKEN` oraz `SUPABASE_PROJECT_REF`; bez nich zmiana funkcji
+    nie powinna być uznana za wdrożoną.
 
 Do działania skanera potrzebny jest Python 3.11. Lekki odczyt Google działa przez
 `fast-flights`, a przy przeniesieniu danych do JavaScript automatycznie uruchamiany
