@@ -1042,6 +1042,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("dialog form{display:grid;gap:14px;max-height:calc(100dvh - 24px);overflow-y:auto}", styles)
         self.assertIn("dialog{width:calc(100% - 20px);max-height:calc(100dvh - 16px)", styles)
         self.assertIn("overflow-x:hidden", styles)
+        self.assertIn("#monitorQueryEstimate:empty{display:none}", styles)
+        self.assertIn(".cabin-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))", styles)
 
     def test_mobile_header_wraps_controls_without_horizontal_overflow(self):
         styles = (ROOT / "site" / "styles.css").read_text()
@@ -1278,7 +1280,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
         self.assertIn('app.js?v=20260803-14', html)
-        self.assertIn('styles.css?v=20260803-8', html)
+        self.assertIn('styles.css?v=20260803-9', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
         app = (ROOT / "site" / "app.js").read_text()
