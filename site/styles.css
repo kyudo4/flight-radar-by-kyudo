@@ -25,3 +25,7 @@ dialog .check{margin-top:0}
 dialog .rules-card{margin-top:0}
 dialog .dialog-actions{position:sticky;bottom:-1px;margin-top:0;padding-top:10px;background:var(--card)}
 @media(max-width:760px){dialog{width:calc(100% - 20px);max-height:calc(100dvh - 16px);border-radius:15px}dialog form{gap:11px;max-height:calc(100dvh - 16px);padding:18px}.dialog-head{margin-bottom:4px}.dialog-head h2{font-size:20px}.dialog-head .icon-button{padding:2px 6px}.form-grid{gap:10px}.rules-card{padding:12px}.cabin-options{gap:7px 10px;padding:9px 10px}.dialog-actions{gap:8px}.dialog-actions .primary,.dialog-actions .secondary{padding:10px 12px}}
+html,body{max-width:100%;overflow-x:hidden}
+dialog{width:min(650px,calc(100vw - 24px));max-width:calc(100vw - 24px);margin:auto;overflow-x:hidden}
+dialog form>*,dialog .form-grid,dialog fieldset{min-width:0}
+@media(max-width:760px){.topbar{height:auto;min-height:64px;flex-wrap:wrap;row-gap:6px;padding:8px 12px}.topbar .brand{min-width:0}.top-actions{margin-left:auto;gap:4px;min-width:0}.top-actions .icon-button{padding:5px 7px}.top-actions .secondary{padding:8px 10px;font-size:12px;white-space:nowrap}.top-nav{order:3;flex:0 0 100%;width:100%;margin:0;padding-top:5px;border-top:1px solid var(--line);justify-content:flex-start}.top-nav .app-tab{flex:0 0 auto}.telegram-bot-link{flex:0 0 auto}dialog{width:calc(100dvw - 16px);max-width:calc(100dvw - 16px);max-height:calc(100dvh - 16px);margin:8px auto}dialog form{max-height:calc(100dvh - 16px);overflow-x:hidden}}

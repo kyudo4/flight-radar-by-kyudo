@@ -1041,6 +1041,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('aria-describedby="telegramDropHint"', html)
         self.assertIn("dialog form{display:grid;gap:14px;max-height:calc(100dvh - 24px);overflow-y:auto}", styles)
         self.assertIn("dialog{width:calc(100% - 20px);max-height:calc(100dvh - 16px)", styles)
+        self.assertIn("overflow-x:hidden", styles)
+
+    def test_mobile_header_wraps_controls_without_horizontal_overflow(self):
+        styles = (ROOT / "site" / "styles.css").read_text()
+        self.assertIn("html,body{max-width:100%;overflow-x:hidden}", styles)
+        self.assertIn(".topbar{height:auto;min-height:64px;flex-wrap:wrap", styles)
+        self.assertIn(".top-nav{order:3;flex:0 0 100%;width:100%", styles)
+        self.assertIn(".top-actions .secondary{padding:8px 10px;font-size:12px", styles)
 
     def test_invite_link_has_real_copy_control_and_fallback(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1269,8 +1277,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260803-13', html)
-        self.assertIn('styles.css?v=20260803-7', html)
+        self.assertIn('app.js?v=20260803-14', html)
+        self.assertIn('styles.css?v=20260803-8', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
         app = (ROOT / "site" / "app.js").read_text()
