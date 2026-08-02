@@ -131,7 +131,7 @@ begin
   if trip = 'round_trip' and (return_from_date is null or return_to_date is null or return_to_date < return_from_date or return_to_date - return_from_date > 31) then
     raise exception 'Zakres dat powrotu może mieć maksymalnie 32 dni';
   end if;
-  if trip = 'round_trip' and (return_to_date <= from_date or return_from_date > to_date) then
+  if trip = 'round_trip' and return_to_date <= from_date then
     raise exception 'Zakres dat powrotu nie tworzy żadnej prawidłowej pary z wylotem';
   end if;
   cabin_count := case when new.filters ? 'cabins' then jsonb_array_length(new.filters -> 'cabins') else 1 end;

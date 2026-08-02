@@ -174,7 +174,6 @@
     const minimumReturn = from.value ? addDays(from.value, 1) : addDays(today, 1);
     returnFrom.min = minimumReturn;
     if (returnFrom.value && returnFrom.value < minimumReturn) returnFrom.value = "";
-    if (returnFrom.value && to.value && returnFrom.value > to.value) returnFrom.value = "";
     returnTo.min = returnFrom.value || minimumReturn;
     if (returnTo.value && returnTo.value < returnTo.min) returnTo.value = "";
   }
@@ -237,7 +236,7 @@
     const days = from && to ? Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1 : 0;
     if (!from || !to || from > to || days > 32) { $("formMessage").textContent = "Zakres dat jest nieprawidłowy (maksymalnie 32 dni)."; return; }
     const returnDays = returnFrom && returnTo ? Math.round((new Date(`${returnTo}T12:00:00`) - new Date(`${returnFrom}T12:00:00`)) / 86400000) + 1 : 0;
-    if (trip === "round_trip" && (!returnFrom || !returnTo || returnFrom > returnTo || returnDays > 32 || returnTo <= from || returnFrom > to)) { $("formMessage").textContent = "Zakres powrotu nie tworzy prawidłowej pary z wylotem."; return; }
+    if (trip === "round_trip" && (!returnFrom || !returnTo || returnFrom > returnTo || returnDays > 32 || returnTo <= from)) { $("formMessage").textContent = "Zakres powrotu nie tworzy prawidłowej pary z wylotem."; return; }
     const combinationUpperBound = (trip === "round_trip" ? days * returnDays : days) * origins.length * destinations.length * cabins.length;
     if (combinationUpperBound > MAX_MONITOR_COMBINATIONS) { $("formMessage").textContent = `Monitor może wygenerować do ${combinationUpperBound.toLocaleString("pl-PL")} kombinacji. Maksymalnie można zapisać ${MAX_MONITOR_COMBINATIONS.toLocaleString("pl-PL")}.`; return; }
     if (!cabins.length || cabins.length > 4 || !budgetRaw || !stopsRaw || !starsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || (durationRaw && (!Number.isFinite(maxDuration) || maxDuration <= 0)) || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isInteger(telegramStars) || telegramStars < 3 || telegramStars > 5 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Wybierz co najmniej jedną klasę i uzupełnij wymagane kryteria. Maksymalny czas możesz pozostawić pusty, aby nie ograniczać długości połączenia."; return; }
@@ -287,13 +286,13 @@
       let offerRows = [];
       if (offerIds.length) {
         const modern = await client.from("flight_offers")
-          .select("id,fingerprint,route,origin,destination,travel_date,return_date,trip_type,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags,last_seen_at,verification_status,verification_note")
+          .select("id,fingerprint,route,origin,destination,travel_date,return_date,trip_type,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags,raw,last_seen_at,verification_status,verification_note")
           .in("id", offerIds);
         if (modern.error && /verification_status|verification_note|column/i.test(modern.error.message || "")) {
           // Compatibility with databases that have not run the additive
           // quality migration yet.
           const legacy = await client.from("flight_offers")
-            .select("id,fingerprint,route,origin,destination,travel_date,return_date,trip_type,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags,last_seen_at")
+            .select("id,fingerprint,route,origin,destination,travel_date,return_date,trip_type,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags,raw,last_seen_at")
             .in("id", offerIds);
           if (legacy.error) throw legacy.error;
           offerRows = legacy.data || [];
@@ -303,7 +302,7 @@
         }
       }
       if (offerIds.length) {
-        const { data: historyRows, error: historyError } = await client.from("offer_price_history").select("offer_id,price_pln,observed_at").in("offer_id", offerIds).order("observed_at", { ascending: true });
+        const { data: historyRows, error: historyError } = await client.from("offer_price_history").select("offer_id,price_pln,observed_at").in("offer_id", offerIds).order("observed_at", { ascending: false }).limit(480);
         if (!historyError) for (const row of historyRows || []) (priceHistory[row.offer_id] ||= []).push(row);
       }
       const byId = new Map(offerRows.map(offer => [offer.id, offer]));
@@ -349,7 +348,7 @@
   }
   function isOfferStale(offer) { return offer.verification_status === "stale" || (offer.last_seen_at && Date.now() - new Date(offer.last_seen_at).getTime() > 24 * 3600000); }
   function renderPriceHistory(offer) {
-    const rows = (priceHistory[offer.id] || []).filter(row => Number(row.price_pln) > 0).slice(-12);
+    const rows = (priceHistory[offer.id] || []).filter(row => Number(row.price_pln) > 0).slice(0, 12).reverse();
     if (!rows.length) return "";
     const prices = rows.map(row => Number(row.price_pln));
     const min = Math.min(...prices), max = Math.max(...prices), span = Math.max(1, max - min);
@@ -360,7 +359,20 @@
     const trend = prices[prices.length - 1] < prices[0] ? "↓ taniej" : prices[prices.length - 1] > prices[0] ? "↑ drożej" : "→ bez zmiany";
     return `<div class="price-history"><span>Historia ceny: ${min.toLocaleString("pl-PL")}–${max.toLocaleString("pl-PL")} PLN · ${trend}</span><span class="price-history-bars" aria-label="Historia ceny">${bars}</span></div>`;
   }
-  function renderOffer(m) { const o = offerData(m); const mins = Number(o.duration_minutes || 0); const duration = mins ? `${Math.floor(mins / 60)}h ${mins % 60}m` : "—"; const stale = isOfferStale(o); const tags = [...(o.tags || []), ...(stale ? ["Cena niepotwierdzona"] : []), ...(o.verification_status === "pending_return" ? ["Powrót do potwierdzenia"] : [])].filter((tag, index, all) => all.indexOf(tag) === index).map(tag => `<span class="tag">${esc(tag)}</span>`).join(""); const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : ""; const dates = o.return_date ? `${dateFmt(o.travel_date)} → ${dateFmt(o.return_date)}` : dateFmt(o.travel_date); return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dates}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${duration} · ${o.stops === 0 ? "bez przesiadek" : `${o.stops ?? "?"} przes.`}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}${renderPriceHistory(o)}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`; }
+  function renderOffer(m) {
+    const o = offerData(m);
+    const raw = o.raw && typeof o.raw === "object" ? o.raw : {};
+    const leg = value => value == null || value === "" || !Number.isFinite(Number(value)) ? "—" : `${Math.floor(Number(value))}h ${Math.round((Number(value) % 1) * 60).toString().padStart(2, "0")}m`;
+    const stops = value => value == null || value === "" || !Number.isFinite(Number(value)) ? "? przes." : (Number(value) === 0 ? "bez przesiadek" : `${Number(value)} przes.`);
+    const roundTripDetails = o.return_date && raw.round_trip_verified && raw.return_duration_h != null
+      ? `Wylot: ${leg(raw.outbound_duration_h)} · ${stops(raw.outbound_stops)} · Powrót: ${leg(raw.return_duration_h)} · ${stops(raw.return_stops)}`
+      : `${leg(o.duration_minutes ? Number(o.duration_minutes) / 60 : null)} · ${stops(o.stops)}`;
+    const stale = isOfferStale(o);
+    const tags = [...(o.tags || []), ...(stale ? ["Cena niepotwierdzona"] : []), ...(o.verification_status === "pending_return" ? ["Powrót do potwierdzenia"] : [])].filter((tag, index, all) => all.indexOf(tag) === index).map(tag => `<span class="tag">${esc(tag)}</span>`).join("");
+    const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : "";
+    const dates = o.return_date ? `${dateFmt(o.travel_date)} → ${dateFmt(o.return_date)}` : dateFmt(o.travel_date);
+    return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dates}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${roundTripDetails}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}${renderPriceHistory(o)}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`;
+  }
   async function sendFeedback(verdict, matchId) { const { error } = await client.from("feedback").upsert({ user_id: user.id, match_id: matchId, verdict }, { onConflict: "user_id,match_id" }); if (error) { alert(error.message); return; } const updated = await client.from("user_matches").update({ feedback: verdict }).eq("id", matchId).eq("user_id", user.id); if (updated.error) { alert(updated.error.message); return; } const label = { buy: "Kupiłbym", expensive: "Za drogo", skip: "Pominięto" }[verdict] || verdict; alert(`Zapisano: ${label}`); }
   async function signInWithTelegram() {
     const button = $("telegramLoginButton");
@@ -429,7 +441,7 @@
       window.setTimeout(() => { button.disabled = false; }, 4000);
     }
   }
-  async function pollScanStatus(runId) { for (let attempt = 0; attempt < 24; attempt++) { await new Promise(resolve => window.setTimeout(resolve, 5000)); const latest = await loadScanStatus(); if (!latest || (runId && latest.id !== runId)) continue; if (["ok", "partial", "blocked", "error"].includes(latest.status)) { const output = $("scanNowMessage"); output.textContent = `Skan zakończony: ${latest.status}. Zapytania: ${latest.query_count || 0}, oferty: ${latest.offer_count || 0}.`; output.className = latest.status === "ok" ? "message good" : "message"; return; } } }
+  async function pollScanStatus(runId, requestedAt = Date.now()) { for (let attempt = 0; attempt < 240; attempt++) { await new Promise(resolve => window.setTimeout(resolve, 5000)); const latest = await loadScanStatus(); if (!latest || (runId && latest.id !== runId) || (!runId && new Date(latest.started_at || 0).getTime() < requestedAt - 5000)) continue; if (["ok", "partial", "blocked", "error"].includes(latest.status)) { const output = $("scanNowMessage"); output.textContent = `Skan zakończony: ${latest.status}. Zapytania: ${latest.query_count || 0}, oferty: ${latest.offer_count || 0}.`; output.className = latest.status === "ok" ? "message good" : "message"; return; } } $("scanNowMessage").textContent = "Skan nadal trwa. Status sprawdzisz w historii skanów."; }
   async function copyInviteLink(link, button) {
     let copied = false;
     try {

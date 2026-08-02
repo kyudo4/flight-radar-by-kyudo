@@ -141,6 +141,11 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
             "aircraft": fl.get("aircraft", ""),
             "link": url,
             "round_trip_verified": bool(fl.get("round_trip_verified", not bool(return_date))),
+            "outbound_duration_h": fl.get("outbound_duration_h"),
+            "outbound_stops": fl.get("outbound_stops"),
+            "return_duration_h": fl.get("return_duration_h"),
+            "return_stops": fl.get("return_stops"),
+            "return_departure": fl.get("return_departure", ""),
         })
     if not flights:
         raise SourceParseError("Google zwrócił oferty bez wymaganej ceny/czasu/przesiadek")

@@ -95,6 +95,38 @@ class FlightRadarRegressionTests(unittest.TestCase):
         flights = google_parser.parse(html, origin="POZ", destination="BKK", return_date="2026-09-14")
         self.assertTrue(flights[0]["round_trip_verified"])
 
+    def test_round_trip_parser_keeps_each_leg_duration_and_stops_separately(self):
+        outbound = [None, None, "Qatar", "WAW", "Warsaw", "NRT", "NRT", None,
+                    [6], None, [8, 30], 150, [], 1, "", [], 3, "A350", None, 0,
+                    [2026, 9, 1], [2026, 9, 1]]
+        inbound = list(outbound)
+        inbound[3], inbound[6] = "NRT", "WAW"
+        inbound[8], inbound[10] = [10], [18, 30]
+        inbound[20], inbound[21] = [2026, 9, 14], [2026, 9, 14]
+        payload = [None, None, None, [[[['business', ['Qatar Airways'], [outbound, inbound]], [[0, 4500]]]]]]
+        html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+        flight = google_parser.parse(html, origin="WAW", destination="NRT", return_date="2026-09-14")[0]
+        self.assertTrue(flight["round_trip_verified"])
+        self.assertEqual(flight["outbound_duration_h"], 2.5)
+        self.assertEqual(flight["return_duration_h"], 8.5)
+        self.assertEqual(flight["outbound_stops"], 0)
+        self.assertEqual(flight["return_stops"], 0)
+        self.assertEqual(flight["duration_h"], 8.5)
+
+    def test_round_trip_quality_applies_time_and_stops_to_both_legs(self):
+        flight = {
+            "round_trip_verified": True,
+            "outbound_duration_h": 21.5, "return_duration_h": 22,
+            "outbound_stops": 1, "return_stops": 1,
+        }
+        filters = {"trip_type": "round_trip", "max_duration_h": 22, "max_stops": 1}
+        self.assertTrue(scanner.quality(flight, filters))
+        flight["return_duration_h"] = 22.1
+        self.assertFalse(scanner.quality(flight, filters))
+        flight["return_duration_h"] = 22
+        flight["return_stops"] = 2
+        self.assertFalse(scanner.quality(flight, filters))
+
     def test_round_trip_queue_has_a_safe_combination_cap(self):
         monitor = {"id": "large-round-trip", "filters": {
             "origins": ["GDN", "WAW", "POZ", "VIE", "MXP"],
@@ -241,6 +273,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_exact_ten_percent_drop_is_eligible(self):
         self.assertTrue(scanner.price_drop_eligible(5000, 4500, 10))
         self.assertFalse(scanner.price_drop_eligible(5000, 4501, 10))
+
+    def test_immediate_new_low_does_not_bypass_repeat_drop_threshold(self):
+        match = {"id": "match-1", "stars": 5, "last_notified_price": 5000,
+                 "telegram_eligible": True, "new_airline": False, "_same_offer": True}
+        offer = {"price_pln": 4950, "tags": []}
+        monitor = {"filters": {"budget_pln": 6000},
+                   "telegram_rules": {"min_stars": 3, "drop_percent": 10, "immediate_new_low": True}}
+        with patch.object(scanner, "telegram") as telegram:
+            self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
+        telegram.assert_not_called()
 
     def test_user_preferred_airline_increases_offer_score(self):
         flight = {"airline": "SQ", "airline_name": "Singapore Airlines", "price_pln": 5000, "duration_h": 14, "stops": 1}
@@ -547,7 +589,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "telegram-feedback.yml").read_text()
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn('cron: "*/5 * * * *"', workflow)
-        self.assertIn('group: friends-backend', workflow)
+        self.assertIn('group: friends-telegram-feedback', workflow)
+        self.assertNotIn('group: friends-backend', workflow)
         self.assertIn("python scanner/telegram_feedback.py", workflow)
         self.assertIn("telegram_io.process_link_updates(api, telegram, TG_TOKEN)", scanner_source)
 
@@ -641,7 +684,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260802-10', html)
+        self.assertIn('app.js?v=20260802-11', html)
         self.assertIn('styles.css?v=20260802-5', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
@@ -650,6 +693,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("to.min = from.value", app)
         self.assertIn("returnFrom.min = minimumReturn", app)
         self.assertIn("returnTo.min = returnFrom.value || minimumReturn", app)
+        self.assertNotIn("returnFrom > to", app)
 
     def test_admin_user_actions_are_compact(self):
         styles = (ROOT / "site" / "styles.css").read_text()
@@ -665,6 +709,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("mark_stale_offers", scanner_source)
         self.assertIn("offer_price_history", migration)
         self.assertIn("scanHistory", (ROOT / "site" / "index.html").read_text())
+
+    def test_bounded_retention_cleanup_is_wired(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260802000400_reliability_retention.sql").read_text()
+        workflow = (ROOT / ".github" / "workflows" / "cleanup.yml").read_text()
+        cleanup = (ROOT / "scanner" / "cleanup.py").read_text()
+        self.assertIn("row_number() over (partition by offer_id", migration)
+        self.assertIn("interval '30 days'", migration)
+        self.assertIn("cleanup_retention", migration)
+        self.assertIn("python scanner/cleanup.py", workflow)
+        self.assertIn("rpc/cleanup_retention", cleanup)
 
     def test_frontend_and_scanner_have_legacy_database_fallbacks(self):
         app = (ROOT / "site" / "app.js").read_text()

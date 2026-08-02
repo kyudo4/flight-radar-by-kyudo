@@ -2,6 +2,7 @@
 import html
 import json
 import re
+import unicodedata
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -20,10 +21,32 @@ DESTS = {
     "HND": ["tokyo", "haneda", "hnd"], "NRT": ["narita", "nrt"], "ICN": ["seoul", "incheon", "icn"]}
 AIRLINES = {"qatar": "QR", "etihad": "EY", "emirates": "EK", "oman air": "WY", "turkish": "TK", "eva air": "BR", "singapore airlines": "SQ", "cathay": "CX", "ana": "NH", "japan airlines": "JL", "air china": "CA"}
 MONTHS = {"january":1,"february":2,"march":3,"april":4,"may":5,"june":6,"july":7,"august":8,"september":9,"october":10,"november":11,"december":12,"września":9,"wrzesień":9}
+AIRPORT_NAMES = json.loads((ROOT.parent / "site" / "airports.json").read_text(encoding="utf-8"))
+AIRPORT_ALIASES = {**ORIGINS, **DESTS}
 
 
 def clean(value):
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", value or ""))).strip()
+
+
+def _fold(value):
+    return "".join(char for char in unicodedata.normalize("NFKD", value or "") if not unicodedata.combining(char)).lower()
+
+
+def airport_mentioned(text, code):
+    folded = _fold(text)
+    aliases = list(AIRPORT_ALIASES.get(code, []))
+    name = AIRPORT_NAMES.get(code, "")
+    if name:
+        aliases.append(name)
+    for alias in aliases:
+        candidate = _fold(alias).strip()
+        if not candidate:
+            continue
+        pattern = r"\b" + re.escape(candidate) + r"\b" if len(candidate) == 3 else re.escape(candidate)
+        if re.search(pattern, folded):
+            return True
+    return False
 
 
 def fresh(value):
@@ -172,6 +195,10 @@ def premium_price(text):
 
 def candidates(monitors):
     out = []
+    origin_pool = sorted({str(code).upper() for monitor in monitors for code in (monitor.get("filters") or {}).get("origins", [])})
+    destination_pool = sorted({str(code).upper() for monitor in monitors for code in (monitor.get("filters") or {}).get("destinations", [])})
+    if not origin_pool or not destination_pool:
+        return out
     for feed in FEEDS:
         for item in items(feed):
             text = (item["title"] + " " + item["description"]).lower()
@@ -179,8 +206,8 @@ def candidates(monitors):
                 continue
             if re.search(r"miles|points|award ticket|loyalty points|mile redemption", text):
                 continue
-            destinations = [code for code, words in DESTS.items() if any(w in text for w in words)]
-            origins = [code for code, words in ORIGINS.items() if any(w in text for w in words)]
+            destinations = [code for code in destination_pool if airport_mentioned(text, code)]
+            origins = [code for code in origin_pool if airport_mentioned(text, code)]
             if not destinations or not origins:
                 continue
             cabin = "FIRST" if re.search(r"first class|first fare", text) else "BUSINESS"

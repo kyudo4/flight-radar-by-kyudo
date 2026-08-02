@@ -25,7 +25,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
 1. Utwórz projekt Supabase i wykonaj `supabase/schema.sql`. Jeśli baza już działała
    na wcześniejszej wersji, wykonaj dodatkowo migracje z katalogu `supabase/migrations/`
    w kolejności dat, w tym `20260728_offer_read_policy.sql`, `20260728_auth_hardening.sql`
-   oraz najnowszą migrację jakości `20260802000300_quality_history_mutes.sql`.
+   oraz najnowsze migracje `20260802000300_quality_history_mutes.sql` i
+   `20260802000400_reliability_retention.sql`.
 2. W BotFather > Bot Settings > Web Login dodaj domenę panelu jako Allowed Origin
    i pozostaw Client ID/Secret dla tego samego bota.
 3. W Supabase Edge Functions utwórz funkcję `telegram-auth` z pliku
@@ -51,6 +52,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
 9. Workflow `Flight Radar Telegram feedback` odbiera reakcje z przycisków maksymalnie
    po około 5 minutach. `Flight Radar Telegram smoke test` służy wyłącznie do ręcznego
    sprawdzenia dostarczenia wiadomości administratorowi.
+10. Workflow `Flight Radar retention cleanup` uruchamia cotygodniowe sprzątanie historii
+    cen, wygasłych monitorów, starych skanów i zaproszeń.
 
 Do działania skanera potrzebny jest Python 3.11 i zależność `fast-flights`.
 Wyniki i ustawienia nie są zapisywane w repozytorium.
@@ -60,9 +63,9 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 - panel pokazuje tylko dokładne daty z monitoringu;
 - monitor może działać w trybie „w jedną stronę” albo „tam i z powrotem”. W drugim
   trybie można podać osobny zakres dat powrotu; Google dostaje oba odcinki w jednym
-  zapytaniu, a system odrzuca powrót wcześniejszy lub tego samego dnia. Wynik
-  round-trip bez potwierdzonych szczegółów powrotu trafia tylko do panelu z etykietą
-  „Powrót do potwierdzenia” i nie wywołuje alertu Telegram;
+  zapytaniu, a system odrzuca powrót wcześniejszy lub tego samego dnia. Czas i liczbę
+  przesiadek sprawdza osobno dla wylotu oraz powrotu. Wynik round-trip bez
+  potwierdzonych szczegółów powrotu nie przechodzi filtra jakości i nie wywołuje alertu;
 - maksymalny czas i liczba przesiadek są sprawdzane przed zapisem dopasowania;
 - drugi termin tej samej trasy i linii nie trafia do panelu ani Telegrama, jeśli
   nie jest tańszy od wcześniejszej ceny; nowa linia jest traktowana jako nowe
@@ -71,6 +74,9 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   użytkownika (domyślnie 10%);
 - cena jest zapisywana w historii, a oferta bez potwierdzenia przez 24 godziny
   dostaje status „Cena niepotwierdzona”; panel domyślnie pokazuje tylko ceny aktualne;
+- historia ceny zapisuje tylko zmiany, panel pobiera ograniczoną liczbę ostatnich punktów,
+  a cotygodniowy workflow usuwa obserwacje starsze niż 30 dni i zostawia stan minimum
+  ceny oraz ostatniego alertu potrzebny do blokowania duplikatów;
 - preferowane linie są ustawiane osobno przez użytkownika i wpływają na ocenę,
   a wykluczone linie są odrzucane przed zapisem;
 - panel ma dodatkowe lokalne filtrowanie wyników po trasie/linii, klasie,

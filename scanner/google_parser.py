@@ -44,6 +44,47 @@ def _script_text(html):
     raise GoogleParseError("Google nie zwrócił danych ds:1")
 
 
+def _segment_details(segments):
+    """Return duration/stops for one contiguous itinerary leg."""
+    if not segments:
+        raise GoogleParseError("Brak odcinków lotu")
+    first = segments[0]
+    last = segments[-1]
+    departure_dt = _datetime(first[20], first[8])
+    arrival_dt = _datetime(last[21], last[10])
+    duration_h = round((arrival_dt - departure_dt).total_seconds() / 3600, 1)
+    if duration_h <= 0:
+        raise GoogleParseError("Nieprawidłowy czas odcinka")
+    aircraft = []
+    for segment in segments:
+        plane = segment[17] if len(segment) > 17 else ""
+        if plane and plane not in aircraft:
+            aircraft.append(str(plane))
+    return {
+        "duration_h": duration_h,
+        "stops": max(0, len(segments) - 1),
+        "departure": "%02d:%02d – %02d:%02d" % (departure_dt.hour, departure_dt.minute, arrival_dt.hour, arrival_dt.minute),
+        "aircraft": " / ".join(aircraft),
+    }
+
+
+def _split_round_trip(segments, origin, destination, return_date):
+    """Split combined Google segments at the first confirmed return leg."""
+    if not (return_date and origin and destination):
+        return segments, [], False
+    expected_date = tuple(int(part) for part in str(return_date).split("-"))
+    for index, segment in enumerate(segments):
+        segment_origin = segment[3] if len(segment) > 3 else ""
+        segment_destination = segment[6] if len(segment) > 6 else ""
+        segment_date = segment[20] if len(segment) > 20 else None
+        if (str(segment_origin).upper() == str(destination).upper()
+                and str(segment_destination).upper() == str(origin).upper()
+                and segment_date is not None
+                and _date(segment_date) == expected_date):
+            return segments[:index], segments[index:], True
+    return segments, [], False
+
+
 def parse(html, origin=None, destination=None, return_date=None):
     script = _script_text(html)
     try:
@@ -68,38 +109,28 @@ def parse(html, origin=None, destination=None, return_date=None):
             price = row[1][0][1]
             if not segments or price in (None, ""):
                 continue
-            first = segments[0]
-            last = segments[-1]
-            departure_dt = _datetime(first[20], first[8])
-            arrival_dt = _datetime(last[21], last[10])
-            duration_h = round((arrival_dt - departure_dt).total_seconds() / 3600, 1)
-            if duration_h <= 0:
-                continue
-            aircraft = []
-            for segment in segments:
-                plane = segment[17] if len(segment) > 17 else ""
-                if plane and plane not in aircraft:
-                    aircraft.append(str(plane))
-            return_verified = not return_date
-            if return_date and origin and destination:
-                for segment in segments:
-                    segment_origin = segment[3] if len(segment) > 3 else ""
-                    segment_destination = segment[6] if len(segment) > 6 else ""
-                    segment_date = segment[20] if len(segment) > 20 else None
-                    if (str(segment_origin).upper() == str(destination).upper()
-                            and str(segment_destination).upper() == str(origin).upper()
-                            and _date(segment_date) == tuple(int(part) for part in str(return_date).split("-"))):
-                        return_verified = True
-                        break
+            outbound_segments, return_segments, return_verified = _split_round_trip(
+                segments, origin, destination, return_date
+            )
+            outbound = _segment_details(outbound_segments)
+            inbound = _segment_details(return_segments) if return_verified else None
+            duration_h = max(outbound["duration_h"], inbound["duration_h"]) if inbound else outbound["duration_h"]
+            stops = max(outbound["stops"], inbound["stops"]) if inbound else outbound["stops"]
+            aircraft = [value for value in (outbound["aircraft"], inbound["aircraft"] if inbound else "") if value]
             flights.append({
                 "airline_name": " / ".join(airlines),
                 "price_pln": price,
                 "duration_h": duration_h,
-                "stops": max(0, len(segments) - 1),
-                "departure": "%02d:%02d – %02d:%02d" % (departure_dt.hour, departure_dt.minute, arrival_dt.hour, arrival_dt.minute),
-                "aircraft": " / ".join(aircraft),
+                "stops": stops,
+                "departure": outbound["departure"],
+                "aircraft": " / ".join(dict.fromkeys(aircraft)),
                 "segments": len(segments),
                 "round_trip_verified": return_verified,
+                "outbound_duration_h": outbound["duration_h"],
+                "outbound_stops": outbound["stops"],
+                "return_duration_h": inbound["duration_h"] if inbound else None,
+                "return_stops": inbound["stops"] if inbound else None,
+                "return_departure": inbound["departure"] if inbound else "",
             })
         except (IndexError, KeyError, TypeError, ValueError, OverflowError):
             continue

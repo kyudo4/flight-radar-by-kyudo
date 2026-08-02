@@ -38,6 +38,7 @@ RESERVED_RUN_ID = os.environ.get("RESERVED_RUN_ID", "").strip()
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))
 FETCH_RETRIES = 2
 STALE_AFTER_HOURS = 24
+PRICE_HISTORY_LAST = {}
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
 AIRPORTS_FILE = Path(__file__).resolve().parents[1] / "site" / "airports.json"
 
@@ -244,6 +245,8 @@ def adaptive_query_limits():
     try:
         recent = api("GET", "scan_runs", params={
             "select": "status,blocked,standard_limit,first_limit,started_at",
+            "status": "not.in.(queued,running)",
+            "finished_at": "not.is.null",
             "order": "started_at.desc", "limit": "6",
         })
     except Exception as exc:
@@ -367,7 +370,11 @@ def offer_fingerprint(task, flight):
 
 
 def quality(flight, filters):
-    duration = flight.get("duration_h")
+    trip = trip_type(filters)
+    if trip == "round_trip" and not flight.get("round_trip_verified", False):
+        # A round-trip result without a confirmed inbound leg cannot be
+        # proven to satisfy the same time/stop rules in both directions.
+        return False
     raw_max_duration = filters.get("max_duration_h")
     if raw_max_duration in (None, ""):
         max_duration = None
@@ -376,16 +383,18 @@ def quality(flight, filters):
             max_duration = float(raw_max_duration)
         except (TypeError, ValueError):
             return False
-    if duration is None and max_duration is not None:
-        return False
-    if duration is not None and max_duration is not None and duration > max_duration:
+    duration_values = [flight.get("outbound_duration_h") or flight.get("duration_h")]
+    if trip == "round_trip":
+        duration_values.append(flight.get("return_duration_h"))
+    if max_duration is not None and any(value is None or float(value) > max_duration for value in duration_values):
         return False
     max_stops = filters.get("max_stops")
-    if max_stops is not None and flight.get("stops") is None:
+    stops_values = [flight.get("outbound_stops") if flight.get("outbound_stops") is not None else flight.get("stops")]
+    if trip == "round_trip":
+        stops_values.append(flight.get("return_stops"))
+    if max_stops is not None and any(value is None or int(value) > int(max_stops) for value in stops_values):
         return False
-    if flight.get("stops") is not None and max_stops is not None and flight["stops"] > int(max_stops):
-        return False
-    if filters.get("direct_only") and flight.get("stops") != 0:
+    if filters.get("direct_only") and any(value != 0 for value in stops_values):
         return False
     excluded = [str(x).lower() for x in filters.get("excluded_airlines", [])]
     return not any(x in (flight.get("airline_name") or "").lower() for x in excluded)
@@ -430,9 +439,10 @@ def fetch_existing(monitor_id):
 def save_offer(task, flight):
     trip_type_value = task.get("trip_type") or ("round_trip" if task.get("return_date") else "one_way")
     tags = list(flight.get("tags") or [])
-    if trip_type_value == "round_trip" and not flight.get("round_trip_verified", False) and "Powrót do potwierdzenia" not in tags:
+    verified = trip_type_value == "one_way" or bool(flight.get("round_trip_verified", False))
+    if trip_type_value == "round_trip" and not verified and "Powrót do potwierdzenia" not in tags:
         tags.append("Powrót do potwierdzenia")
-    verification_status = "verified" if trip_type_value == "one_way" and flight.get("round_trip_verified", True) else "pending_return"
+    verification_status = "verified" if verified else "pending_return"
     verification_note = "" if verification_status == "verified" else "Google nie udostępnił jeszcze szczegółów odcinka powrotnego"
     payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "return_date": task.get("return_date"), "trip_type": trip_type_value, "cabin": task["cabin"].upper().replace("-", "_"), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": tags, "verification_status": verification_status, "verification_note": verification_note, "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
     try:
@@ -449,7 +459,20 @@ def save_offer(task, flight):
     offer = rows[0] if rows else api("GET", "flight_offers", params={"fingerprint": "eq." + payload["fingerprint"], "select": "*"})[0]
     try:
         if flight.get("price_pln"):
-            api("POST", "offer_price_history", body={"offer_id": offer["id"], "price_pln": int(flight["price_pln"])})
+            offer_id = offer["id"]
+            current_price = int(flight["price_pln"])
+            previous_price = PRICE_HISTORY_LAST.get(offer_id)
+            if previous_price is None:
+                latest = api("GET", "offer_price_history", params={
+                    "offer_id": "eq." + offer_id,
+                    "select": "price_pln",
+                    "order": "observed_at.desc",
+                    "limit": "1",
+                })
+                previous_price = int(latest[0]["price_pln"]) if latest else None
+            if previous_price != current_price:
+                api("POST", "offer_price_history", body={"offer_id": offer_id, "price_pln": current_price})
+            PRICE_HISTORY_LAST[offer_id] = current_price
     except Exception as exc:
         log("Nie udało się zapisać historii ceny: %s" % str(exc)[:120])
     return offer
@@ -457,6 +480,7 @@ def save_offer(task, flight):
 
 def alert_text(offer, stars, match_id):
     duration = offer.get("duration_minutes") or 0
+    raw = offer.get("raw") if isinstance(offer.get("raw"), dict) else {}
     route = html.escape(str(offer.get("route", "")), quote=True)
     cabin = html.escape(str(offer.get("cabin", "")), quote=True)
     airline = html.escape(str(offer.get("airline_name", "")), quote=True)
@@ -468,7 +492,16 @@ def alert_text(offer, stars, match_id):
     tag_line = "\n🏷 " + html.escape(" · ".join(tags), quote=True) if tags else ""
     aircraft_line = "\n🛫 " + aircraft if aircraft else ""
     dates = travel_date + (" → " + return_date if return_date else "")
-    return ("<b>%s</b>\n🧭 <b>%s</b> · %s\n✈️ %s%s\n💰 <b>%s PLN</b>\n🗓 %s · %dh %02dm · %s przes.%s\n🔗 <a href=\"%s\">Otwórz ofertę</a>" % ("⭐" * stars, route, cabin, airline, aircraft_line, f"{offer.get('price_pln') or 0:,}".replace(",", " "), dates, duration // 60, duration % 60, offer.get("stops", "?"), tag_line, html.escape(link, quote=True)))
+    if offer.get("return_date") and raw.get("round_trip_verified") and raw.get("return_duration_h") is not None:
+        outbound_duration = raw.get("outbound_duration_h") or 0
+        return_duration = raw.get("return_duration_h") or 0
+        travel_quality = "tam %dh %02dm, %s przes. · powrót %dh %02dm, %s przes." % (
+            int(outbound_duration), round((outbound_duration % 1) * 60), raw.get("outbound_stops", "?"),
+            int(return_duration), round((return_duration % 1) * 60), raw.get("return_stops", "?"),
+        )
+    else:
+        travel_quality = "%dh %02dm · %s przes." % (duration // 60, duration % 60, offer.get("stops", "?"))
+    return ("<b>%s</b>\n🧭 <b>%s</b> · %s\n✈️ %s%s\n💰 <b>%s PLN</b>\n🗓 %s · %s%s\n🔗 <a href=\"%s\">Otwórz ofertę</a>" % ("⭐" * stars, route, cabin, airline, aircraft_line, f"{offer.get('price_pln') or 0:,}".replace(",", " "), dates, travel_quality, tag_line, html.escape(link, quote=True)))
 
 
 def airline_identity(flight):
@@ -520,7 +553,10 @@ def send_due_alert(match, offer, monitor, connection):
     is_drop = price_drop_eligible(old, price, drop * 100)
     is_new_low = bool(match.get("telegram_eligible"))
     is_new_airline = bool(match.get("new_airline"))
-    if not is_drop and not is_new_airline and not (is_new_low and rules.get("immediate_new_low", True)):
+    same_offer = bool(match.get("_same_offer"))
+    pending_unnotified = bool(match.get("_pending_unnotified"))
+    immediate_new_low = bool(rules.get("immediate_new_low", False)) and not same_offer
+    if not is_drop and not is_new_airline and not pending_unnotified and not (is_new_low and immediate_new_low):
         return False
     sent = telegram("sendMessage", {"chat_id": connection["chat_id"], "text": alert_text(offer, stars, match["id"]), "parse_mode": "HTML", "disable_web_page_preview": False, "reply_markup": {"inline_keyboard": [[{"text": "👍 Kupiłbym", "callback_data": "fb|%s|buy" % match["id"]}, {"text": "💸 Za drogo", "callback_data": "fb|%s|expensive" % match["id"]}], [{"text": "🙅 Nie interesuje", "callback_data": "fb|%s|skip" % match["id"]}, {"text": "⏱ Za długo", "callback_data": "fb|%s|toolong" % match["id"]}, {"text": "✈️ Zła linia", "callback_data": "fb|%s|badairline" % match["id"]}]]}})
     if not sent or not sent.get("ok"):
@@ -529,11 +565,12 @@ def send_due_alert(match, offer, monitor, connection):
     return True
 
 
-def process_candidate(monitor, task, flight):
+def process_candidate(monitor, task, flight, previous=None):
     filters = monitor.get("filters") or {}
     if not quality(flight, filters) or not budget_ok(flight, filters):
         return 0, 0
-    previous = fetch_existing(monitor["id"])
+    if previous is None:
+        previous = fetch_existing(monitor["id"])
     route = "%s → %s" % (task["origin"], task["dest"])
     cabin = str(task.get("cabin") or "").upper().replace("-", "_")
     return_date = task.get("return_date")
@@ -581,8 +618,23 @@ def process_candidate(monitor, task, flight):
         match["new_airline"] = bool(match["new_airline"] or row.get("new_airline"))
     saved = api("POST", "user_matches", body=match, params={"on_conflict": "user_id,monitor_id,offer_id"})
     current = saved[0] if saved else (row or match)
+    current["_same_offer"] = bool(row)
+    current["_pending_unnotified"] = bool(row and not row.get("notified_at") and (row.get("telegram_eligible") or match["telegram_eligible"]))
     connection = api("GET", "telegram_connections", params={"user_id": "eq." + monitor["user_id"], "select": "chat_id"})
-    return 1, int(send_due_alert(current, offer, monitor, connection[0] if connection else None))
+    sent = int(send_due_alert(current, offer, monitor, connection[0] if connection else None))
+    if sent:
+        current["notified_at"] = datetime.utcnow().isoformat() + "Z"
+        current["last_notified_price"] = offer.get("price_pln")
+        current["_pending_unnotified"] = False
+    cache_entry = {**current, "flight_offers": offer}
+    if row:
+        for index, old in enumerate(previous):
+            if old.get("offer_id") == offer.get("id"):
+                previous[index] = cache_entry
+                break
+    else:
+        previous.append(cache_entry)
+    return 1, sent
 
 
 def main():
@@ -653,11 +705,15 @@ def main():
     task_errors = list(sync_errors)
     blocked = False
     executed_count = 0
+    source_errors_in_row = 0
+    history_cache = {}
     try:
         for task in tasks:
             executed_count += 1
+            task_failed = False
             try:
                 _level, flights = fetch_task(task)
+                source_errors_in_row = 0
             except gflights.BlockedError as exc:
                 # Jedna twarda blokada zatrzymuje cały kolektor Google. Kolejne
                 # pozycje pozostają zaległe i wrócą w następnym przebiegu.
@@ -668,6 +724,8 @@ def main():
             except Exception as exc:
                 task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
                 log("Pominięto zapytanie po błędzie źródła: %s" % task_errors[-1])
+                source_errors_in_row += 1
+                task_failed = True
             else:
                 related = [m for m in active if m["id"] in task["monitor_ids"]]
                 preferred_codes = set(PRIORITY)
@@ -679,14 +737,29 @@ def main():
                 for flight in gflights.cheapest_picks(flights, preferred_codes, max_options=3):
                     for monitor in related:
                         try:
-                            added, sent = process_candidate(monitor, task, flight)
+                            if monitor["id"] not in history_cache:
+                                history_cache[monitor["id"]] = fetch_existing(monitor["id"])
+                            added, sent = process_candidate(monitor, task, flight, history_cache[monitor["id"]])
                             offers_count += added; sent_count += sent
                         except Exception as exc:
                             task_errors.append("%s-%s-%s/%s: %s" % (task["origin"], task["dest"], task["date"], monitor["id"], str(exc)[:120]))
                             log("Pominięto ofertę po błędzie zapisu/alertu: %s" % task_errors[-1])
-                time.sleep(REQUEST_DELAY_SECONDS)
-            api("PATCH", "monitor_scan_items", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
-            api("PATCH", "monitors", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["monitor_ids"])})
+            finally:
+                # Keep the inter-request throttle active after parse/network
+                # errors too. A malformed Google response must not turn into
+                # a burst of unthrottled requests.
+                if not blocked:
+                    time.sleep(REQUEST_DELAY_SECONDS)
+            if task_failed:
+                retry_at = now + timedelta(hours=1)
+                api("PATCH", "monitor_scan_items", body={"next_scan_at": retry_at.isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
+                if source_errors_in_row >= 3:
+                    task_errors.append("Google: obwód ochronny po trzech kolejnych błędach źródła")
+                    blocked = True
+                    break
+            else:
+                api("PATCH", "monitor_scan_items", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
+                api("PATCH", "monitors", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["monitor_ids"])})
         # RSS nie zużywa limitu zapytań Google, ale przechodzi ten sam filtr
         # dat, klasy, trasy i osobnych reguł Telegrama.
         rss_active = [m for m in active if trip_type(m.get("filters") or {}) == "one_way"]
@@ -694,7 +767,9 @@ def main():
             task = {"origin": origin, "dest": dest, "date": travel_date,
                     "cabin": str(flight.get("cabin") or "BUSINESS").lower().replace("_", "-")}
             try:
-                added, sent = process_candidate(monitor, task, flight)
+                if monitor["id"] not in history_cache:
+                    history_cache[monitor["id"]] = fetch_existing(monitor["id"])
+                added, sent = process_candidate(monitor, task, flight, history_cache[monitor["id"]])
                 offers_count += added; sent_count += sent
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
