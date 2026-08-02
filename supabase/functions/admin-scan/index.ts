@@ -38,11 +38,22 @@ Deno.serve(async (request) => {
       return json({ error: 'Brak uprawnień administratora.' }, corsHeaders, 403);
     }
 
-    const recentCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const { data: recentRuns, error: runsError } = await admin.from('scan_runs')
-      .select('started_at,status').gte('started_at', recentCutoff).order('started_at', { ascending: false }).limit(1);
-    if (runsError) throw runsError;
-    if (recentRuns?.length) return json({ error: 'Skan już trwał lub był uruchomiony w ciągu ostatnich 10 minut.' }, corsHeaders, 429);
+    let reservedRun: string | null = null;
+    const { data: rpcRun, error: reserveError } = await admin.rpc('reserve_scan_slot');
+    if (!reserveError) {
+      reservedRun = rpcRun as string | null;
+      if (!reservedRun) return json({ error: 'Skan już trwał lub był uruchomiony w ciągu ostatnich 10 minut.' }, corsHeaders, 429);
+    } else {
+      // Compatibility fallback for projects where the new migration has not
+      // been applied yet. It keeps the old guard working during rollout;
+      // once the RPC exists, the transactional reservation above is used.
+      console.warn('reserve_scan_slot is not available yet; using compatibility guard', reserveError.message);
+      const recentCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const { data: recentRuns, error: runsError } = await admin.from('scan_runs')
+        .select('started_at,status').gte('started_at', recentCutoff).order('started_at', { ascending: false }).limit(1);
+      if (runsError) throw runsError;
+      if (recentRuns?.length) return json({ error: 'Skan już trwał lub był uruchomiony w ciągu ostatnich 10 minut.' }, corsHeaders, 429);
+    }
 
     const githubResponse = await fetch(`https://api.github.com/repos/${repository}/actions/workflows/${workflow}/dispatches`, {
       method: 'POST',
@@ -52,10 +63,16 @@ Deno.serve(async (request) => {
         'X-GitHub-Api-Version': '2022-11-28',
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ ref: 'main' })
+      body: JSON.stringify({
+        ref: 'main',
+        ...(reservedRun ? { inputs: { reserved_run_id: reservedRun } } : {})
+      })
     });
     if (!githubResponse.ok) {
       console.error('GitHub workflow dispatch failed with status', githubResponse.status);
+      if (reservedRun) {
+        await admin.from('scan_runs').update({ status: 'error', finished_at: new Date().toISOString(), error: `GitHub HTTP ${githubResponse.status}` }).eq('id', reservedRun);
+      }
       return json({ error: 'GitHub nie przyjął żądania uruchomienia skanu.' }, corsHeaders, 502);
     }
     return json({ ok: true }, corsHeaders, 202);

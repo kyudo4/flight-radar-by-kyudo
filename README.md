@@ -39,6 +39,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
    repozytorium, uprawnienie Actions: Read and write), `GITHUB_REPOSITORY` oraz
    `GITHUB_WORKFLOW_ID=scan.yml`. Token GitHub zostaje wyłącznie w Supabase i nie trafia
    do strony. Przycisk ręcznego skanu jest dostępny tylko aktywnemu administratorowi.
+   Po wdrożeniu nowych plików ponownie opublikuj funkcję `admin-scan`; przed zastosowaniem
+   najnowszej migracji funkcja ma kompatybilny tryb przejściowy.
 4. Ustaw adres projektu i anon key w `site/config.js` na podstawie `site/config.example.js`.
 5. Ustaw sekrety GitHub Actions: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
    `SUPABASE_ANON_KEY` i `TG_BOT_TOKEN`.
@@ -58,7 +60,9 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 - panel pokazuje tylko dokładne daty z monitoringu;
 - monitor może działać w trybie „w jedną stronę” albo „tam i z powrotem”. W drugim
   trybie można podać osobny zakres dat powrotu; Google dostaje oba odcinki w jednym
-  zapytaniu, a system odrzuca powrót wcześniejszy lub tego samego dnia;
+  zapytaniu, a system odrzuca powrót wcześniejszy lub tego samego dnia. Wynik
+  round-trip bez potwierdzonych szczegółów powrotu trafia tylko do panelu z etykietą
+  „Powrót do potwierdzenia” i nie wywołuje alertu Telegram;
 - maksymalny czas i liczba przesiadek są sprawdzane przed zapisem dopasowania;
 - drugi termin tej samej trasy i linii nie trafia do panelu ani Telegrama, jeśli
   nie jest tańszy od wcześniejszej ceny; nowa linia jest traktowana jako nowe
@@ -82,6 +86,8 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   `python scripts/generate_airports.py airports.csv site/airports.json`.
 - jeden monitoring może obejmować kilka klas jednocześnie, np. Business i First;
   każda klasa dostaje osobne zadania skanera.
+- jeden monitoring może wygenerować maksymalnie 5000 kombinacji. Panel pokazuje
+  wyliczenie przed zapisem, a baza i skaner stosują ten sam limit.
 
 ## Zasady bezpieczeństwa
 

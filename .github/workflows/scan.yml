@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "17 */6 * * *"
   workflow_dispatch:
+    inputs:
+      reserved_run_id:
+        description: "Zarezerwowany identyfikator przebiegu administratora"
+        required: false
+        type: string
 
 concurrency:
   group: friends-backend
@@ -34,4 +39,5 @@ jobs:
           MAX_FIRST_CEILING: "24"
           GOOGLE_REQUEST_DELAY_SECONDS: "1.5"
           FORCE_SCAN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          RESERVED_RUN_ID: ${{ inputs.reserved_run_id || '' }}
         run: python scanner/friends_scanner.py

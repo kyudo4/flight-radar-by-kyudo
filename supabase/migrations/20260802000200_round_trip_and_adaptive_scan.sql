@@ -56,6 +56,8 @@ declare
   stops integer;
   min_stars integer;
   drop_percent numeric;
+  cabin_count integer;
+  combination_count bigint;
 begin
   if length(trim(coalesce(new.name, ''))) < 1 or length(new.name) > 120 then
     raise exception 'Nazwa monitora musi mieć od 1 do 120 znaków';
@@ -91,6 +93,17 @@ begin
   if trip = 'round_trip' and (return_from_date is null or return_to_date is null or return_to_date < return_from_date or return_to_date - return_from_date > 31) then
     raise exception 'Zakres dat powrotu może mieć maksymalnie 32 dni';
   end if;
+  if trip = 'round_trip' and (return_to_date <= from_date or return_from_date > to_date) then
+    raise exception 'Zakres dat powrotu nie tworzy żadnej prawidłowej pary z wylotem';
+  end if;
+  cabin_count := case when new.filters ? 'cabins' then jsonb_array_length(new.filters -> 'cabins') else 1 end;
+  combination_count := origin_count * destination_count * (to_date - from_date + 1) * cabin_count;
+  if trip = 'round_trip' then
+    combination_count := combination_count * (return_to_date - return_from_date + 1);
+  end if;
+  if combination_count > 5000 then
+    raise exception 'Monitor ma zbyt wiele kombinacji do bezpiecznego skanowania (maksymalnie 5000)';
+  end if;
   if budget <= 0 or budget > 1000000 or (duration is not null and duration <= 0) or stops < 0 or stops > 9 then
     raise exception 'Nieprawidłowy limit czasu lub przesiadek';
   end if;
@@ -112,3 +125,22 @@ begin
   return new;
 end;
 $$;
+
+create or replace function public.reserve_scan_slot()
+returns uuid language plpgsql security definer set search_path = public as $$
+declare
+  reserved_id uuid;
+begin
+  perform pg_advisory_xact_lock(47011);
+  if exists (select 1 from public.scan_runs where started_at >= now() - interval '10 minutes') then
+    return null;
+  end if;
+  insert into public.scan_runs(status, blocked, query_count)
+  values ('queued', false, 0)
+  returning id into reserved_id;
+  return reserved_id;
+end;
+$$;
+
+revoke all on function public.reserve_scan_slot() from public, anon, authenticated;
+grant execute on function public.reserve_scan_slot() to service_role;

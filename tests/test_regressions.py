@@ -1,7 +1,8 @@
+import json
 import sys
 import unittest
 import urllib.error
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scanner"))
 
 import friends_scanner as scanner
 import gflights
+import google_parser
 import rss
 import telegram_io
 
@@ -68,6 +70,44 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(len(kwargs["flight_data"]), 2)
         self.assertEqual(kwargs["flight_data"][1].date, "2026-09-14")
 
+    def test_google_parser_reads_current_server_payload_instead_of_empty_html(self):
+        segment = [None, None, "Qatar", "POZ", "Poznań Airport", "Bangkok", "BKK", None,
+                   [6], None, [8, 30], 150, [], 1, "", [], 3, "A350", None, 0,
+                   [2026, 9, 1], [2026, 9, 1]]
+        payload = [None, None, None, [[[["business", ["Qatar Airways"], [segment]], [[0, 4500]]]]]]
+        html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+        flights = google_parser.parse(html)
+        self.assertEqual(len(flights), 1)
+        self.assertEqual(flights[0]["price_pln"], 4500)
+        self.assertEqual(flights[0]["stops"], 0)
+        self.assertEqual(flights[0]["airline_name"], "Qatar Airways")
+
+    def test_round_trip_queue_has_a_safe_combination_cap(self):
+        monitor = {"id": "large-round-trip", "filters": {
+            "origins": ["GDN", "WAW", "POZ", "VIE", "MXP"],
+            "destinations": ["BKK", "SIN", "KUL", "HKG", "NRT"],
+            "from": "2026-09-01", "to": "2026-10-02",
+            "return_from": "2026-10-03", "return_to": "2026-11-03",
+            "trip_type": "round_trip", "cabins": ["BUSINESS", "FIRST", "ECONOMY", "PREMIUM_ECONOMY"],
+        }}
+        self.assertEqual(scanner.monitor_combination_count(monitor["filters"]), 102400)
+        self.assertEqual(scanner.monitor_combinations(monitor), [])
+
+    def test_past_departures_are_not_materialized(self):
+        past = (date.today() - timedelta(days=2)).isoformat()
+        past_end = (date.today() - timedelta(days=1)).isoformat()
+        monitor = {"id": "past", "filters": {"origins": ["POZ"], "destinations": ["BKK"],
+                                                   "from": past, "to": past_end, "cabin": "BUSINESS"}}
+        self.assertEqual(scanner.monitor_combinations(monitor), [])
+
+    def test_round_trip_requires_at_least_one_valid_departure_return_pair(self):
+        start = (date.today() + timedelta(days=10)).isoformat()
+        end = (date.today() + timedelta(days=11)).isoformat()
+        monitor = {"id": "invalid-pair", "filters": {"origins": ["POZ"], "destinations": ["BKK"],
+            "from": start, "to": end, "return_from": (date.today() + timedelta(days=1)).isoformat(),
+            "return_to": (date.today() + timedelta(days=2)).isoformat(), "trip_type": "round_trip", "cabin": "BUSINESS"}}
+        self.assertEqual(scanner.monitor_combinations(monitor), [])
+
     def test_query_ramp_drops_after_google_block_and_grows_after_healthy_runs(self):
         with patch.object(scanner, "api", return_value=[{"status": "blocked", "blocked": True, "standard_limit": 320, "first_limit": 18}]):
             reduced = scanner.adaptive_query_limits()
@@ -78,7 +118,10 @@ class FlightRadarRegressionTests(unittest.TestCase):
             {"status": "partial", "blocked": False, "standard_limit": 160, "first_limit": 8},
         ]):
             increased = scanner.adaptive_query_limits()
-        self.assertEqual(increased, {"standard": 280, "first": 14})
+            self.assertEqual(increased, {"standard": 240, "first": 12})
+
+        with patch.object(scanner, "api", side_effect=RuntimeError("history unavailable")):
+            self.assertEqual(scanner.adaptive_query_limits(), {"standard": 60, "first": 4})
 
     def test_monitor_rejects_more_than_five_airports_per_side(self):
         monitor = {
@@ -174,6 +217,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertFalse(scanner.historical_duplicate(previous, "POZ → BKK", "BUSINESS", "EY", "2026-09-02", 5500))
         self.assertFalse(scanner.historical_duplicate(previous, "POZ → BKK", "FIRST", "QR", "2026-09-02", 5500))
 
+    def test_round_trip_duplicate_ignores_return_date_when_comparing_new_days(self):
+        previous = [{"min_price_for_user": 5000, "flight_offers": {
+            "route": "POZ → BKK", "travel_date": "2026-09-01", "return_date": "2026-09-10",
+            "trip_type": "round_trip", "cabin": "BUSINESS", "airline": "QR", "price_pln": 5000,
+        }}]
+        self.assertTrue(scanner.historical_duplicate(previous, "POZ → BKK", "BUSINESS", "QR", "2026-09-02", 5300, "2026-09-11", "round_trip"))
+        self.assertFalse(scanner.historical_duplicate(previous, "POZ → BKK", "BUSINESS", "QR", "2026-09-02", 4900, "2026-09-11", "round_trip"))
+
     def test_exact_ten_percent_drop_is_eligible(self):
         self.assertTrue(scanner.price_drop_eligible(5000, 4500, 10))
         self.assertFalse(scanner.price_drop_eligible(5000, 4501, 10))
@@ -216,6 +267,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
                  "telegram_eligible": True, "new_airline": True}
         offer = {"price_pln": 12000, "tags": ["Error Fare"]}
         monitor = {"filters": {"budget_pln": 4500},
+                   "telegram_rules": {"min_stars": 3, "immediate_new_low": True}}
+        with patch.object(scanner, "telegram") as telegram:
+            self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
+        telegram.assert_not_called()
+
+    def test_unverified_round_trip_never_sends_telegram_alert(self):
+        match = {"id": "match-round-trip", "stars": 5, "last_notified_price": None,
+                 "telegram_eligible": True, "new_airline": True}
+        offer = {"price_pln": 3500, "tags": ["Powrót do potwierdzenia"]}
+        monitor = {"filters": {"budget_pln": 5000},
                    "telegram_rules": {"min_stars": 3, "immediate_new_low": True}}
         with patch.object(scanner, "telegram") as telegram:
             self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
@@ -545,9 +606,28 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("profile?.status !== 'active'", function)
         self.assertIn("GITHUB_ACTIONS_TOKEN", function)
         self.assertIn("/actions/workflows/${workflow}/dispatches", function)
+        self.assertIn("reserve_scan_slot", function)
+        self.assertIn("reserved_run_id", function)
         self.assertNotIn("'Access-Control-Allow-Origin': '*'", function)
         self.assertIn("workflow_dispatch", workflow)
+        self.assertIn("reserved_run_id:", workflow)
         self.assertIn("FORCE_SCAN", workflow)
+
+    def test_round_trip_and_scan_limits_are_consistent_across_layers(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260802000200_round_trip_and_adaptive_scan.sql").read_text()
+        self.assertIn("MAX_MONITOR_COMBINATIONS = 5000", scanner_source)
+        self.assertIn("MAX_MONITOR_COMBINATIONS = 5000", app)
+        self.assertIn("maksymalnie 5000", schema)
+        self.assertIn("maksymalnie 5000", migration)
+        self.assertIn("return_to_date <= from_date", schema)
+        self.assertIn("return_to_date <= from_date", migration)
+
+    def test_frontend_bumps_script_cache_after_markup_change(self):
+        html = (ROOT / "site" / "index.html").read_text()
+        self.assertIn('app.js?v=20260802-5', html)
 
     def test_telegram_bootstrap_password_fits_bcrypt_limit(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()

@@ -30,9 +30,11 @@ FIRST_STEP = max(1, min(50, int(os.environ.get("QUERY_RAMP_FIRST_STEP", "2"))))
 STANDARD_FLOOR = max(1, min(INITIAL_STANDARD, int(os.environ.get("QUERY_BLOCK_FLOOR_STANDARD", "60"))))
 FIRST_FLOOR = max(1, min(INITIAL_FIRST, int(os.environ.get("QUERY_BLOCK_FLOOR_FIRST", "4"))))
 MAX_AIRPORTS_PER_SIDE = 5
+MAX_MONITOR_COMBINATIONS = 5000
 SCAN_INTERVAL_HOURS = 6
 FORCE_SCAN = os.environ.get("FORCE_SCAN", "false").lower() == "true"
 PROCESS_TELEGRAM_ONLY = os.environ.get("PROCESS_TELEGRAM_ONLY", "false").lower() == "true"
+RESERVED_RUN_ID = os.environ.get("RESERVED_RUN_ID", "").strip()
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))
 FETCH_RETRIES = 2
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
@@ -110,16 +112,35 @@ def valid_return_dates(filters, departure):
             if (candidate - departure).days >= 1]
 
 
+def monitor_combination_count(filters):
+    """Zwraca bezpieczny górny limit kombinacji przed materializacją kolejki."""
+    origins = {str(x).upper() for x in (filters or {}).get("origins", []) if x}
+    destinations = {str(x).upper() for x in (filters or {}).get("destinations", []) if x}
+    try:
+        departure_days = (parse_date(filters["to"]) - parse_date(filters["from"])).days + 1
+        cabins = (filters.get("cabins") if isinstance(filters.get("cabins"), list)
+                  else [filters.get("cabin") or "BUSINESS"])
+        cabin_count = len({str(value).upper() for value in cabins if value})
+        if trip_type(filters) == "round_trip":
+            return (len(origins) * len(destinations) * departure_days *
+                    ((parse_date(filters["return_to"]) - parse_date(filters["return_from"])).days + 1) *
+                    max(1, cabin_count))
+        return len(origins) * len(destinations) * departure_days * max(1, cabin_count)
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
 def monitor_combinations(monitor):
     f = monitor.get("filters") or {}
     origins = sorted({x.upper() for x in f.get("origins", []) if x})
     destinations = sorted({x.upper() for x in f.get("destinations", []) if x})
-    dates = date_range(f)
+    dates = [day for day in date_range(f) if day >= date.today()]
     raw_cabins = f.get("cabins") if isinstance(f.get("cabins"), list) else [f.get("cabin") or "BUSINESS"]
     cabins = sorted({str(value).lower().replace("_", "-") for value in raw_cabins if str(value).upper() in {"BUSINESS", "FIRST", "PREMIUM_ECONOMY", "ECONOMY"}})
     if (not origins or not destinations or not dates
             or len(origins) > MAX_AIRPORTS_PER_SIDE
             or len(destinations) > MAX_AIRPORTS_PER_SIDE
+            or monitor_combination_count(f) > MAX_MONITOR_COMBINATIONS
             or (VALID_AIRPORT_CODES and any(code not in VALID_AIRPORT_CODES for code in origins + destinations))):
         return []
     return [{"monitor_id": monitor["id"], "origin": origin, "destination": destination,
@@ -147,16 +168,25 @@ def sync_monitor_scan_items(monitor):
     })
     desired_keys = {(x["origin"], x["destination"], x["travel_date"], x.get("return_date"), x["trip_type"], x["cabin"]) for x in desired}
     stale = [x["id"] for x in existing if (x["origin"], x["destination"], x["travel_date"], x.get("return_date"), x.get("trip_type") or ("round_trip" if x.get("return_date") else "one_way"), x["cabin"]) not in desired_keys]
-    for item_id in stale:
-        api("DELETE", "monitor_scan_items", params={"id": "eq." + item_id})
+    for offset in range(0, len(stale), 500):
+        ids = ",".join(stale[offset:offset + 500])
+        if ids:
+            api("DELETE", "monitor_scan_items", params={"id": "in.(%s)" % ids})
     existing_keys = {(x["origin"], x["destination"], x["travel_date"], x.get("return_date"), x.get("trip_type") or ("round_trip" if x.get("return_date") else "one_way"), x["cabin"]) for x in existing}
     missing = [x for x in desired if (x["origin"], x["destination"], x["travel_date"], x.get("return_date"), x["trip_type"], x["cabin"]) not in existing_keys]
-    if missing:
+    for offset in range(0, len(missing), 500):
+        batch = missing[offset:offset + 500]
+        if not batch:
+            continue
         # Missing rows were resolved against the complete key above. The
         # one-way and round-trip partial indexes intentionally have different
         # conflict targets, so a plain insert is safer than pretending there
         # is one universal PostgREST on_conflict target.
-        api("POST", "monitor_scan_items", body=missing)
+        api("POST", "monitor_scan_items", body=batch)
+
+
+class ScanBlockedRun(RuntimeError):
+    """Służy do oznaczenia blokady Google jako failed w GitHub Actions."""
 
 
 def force_due_scan_items(monitors, now):
@@ -217,7 +247,7 @@ def adaptive_query_limits():
         })
     except Exception as exc:
         log("Nie udało się odczytać historii rampowania; używam limitu startowego: %s" % str(exc)[:120])
-        return limits
+        return {"standard": STANDARD_FLOOR, "first": FIRST_FLOOR}
     if not recent:
         return limits
     latest = recent[0]
@@ -226,7 +256,7 @@ def adaptive_query_limits():
     if latest.get("blocked") or latest.get("status") == "blocked":
         return {"standard": max(STANDARD_FLOOR, limits["standard"] // 2),
                 "first": max(FIRST_FLOOR, limits["first"] // 2)}
-    healthy = [row for row in recent[:3] if row.get("status") in {"ok", "partial"} and not row.get("blocked")]
+    healthy = [row for row in recent[:3] if row.get("status") == "ok" and not row.get("blocked")]
     if len(healthy) == 3:
         limits["standard"] = min(STANDARD_CEILING, limits["standard"] + STANDARD_STEP)
         limits["first"] = min(FIRST_CEILING, limits["first"] + FIRST_STEP)
@@ -386,7 +416,11 @@ def fetch_existing(monitor_id):
 
 
 def save_offer(task, flight):
-    payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "return_date": task.get("return_date"), "trip_type": task.get("trip_type") or ("round_trip" if task.get("return_date") else "one_way"), "cabin": task["cabin"].upper().replace("-", "_"), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": flight.get("tags", []), "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
+    trip_type_value = task.get("trip_type") or ("round_trip" if task.get("return_date") else "one_way")
+    tags = list(flight.get("tags") or [])
+    if trip_type_value == "round_trip" and not flight.get("round_trip_verified", False) and "Powrót do potwierdzenia" not in tags:
+        tags.append("Powrót do potwierdzenia")
+    payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "return_date": task.get("return_date"), "trip_type": trip_type_value, "cabin": task["cabin"].upper().replace("-", "_"), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": tags, "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
     rows = api("POST", "flight_offers", body=payload, params={"on_conflict": "fingerprint"})
     return rows[0] if rows else api("GET", "flight_offers", params={"fingerprint": "eq." + payload["fingerprint"], "select": "*"})[0]
 
@@ -422,9 +456,9 @@ def historical_duplicate(previous, route, cabin, airline, travel_date, price, re
         offer = old.get("flight_offers") or {}
         old_cabin = str(offer.get("cabin") or "").upper().replace("-", "_")
         old_trip = offer.get("trip_type") or ("round_trip" if offer.get("return_date") else "one_way")
+        exact_same_query = offer.get("travel_date") == travel_date and offer.get("return_date") == return_date
         if (offer.get("route") != route or old_cabin != cabin or old_trip != trip_type_value
-                or offer.get("return_date") != return_date
-                or airline_identity(offer) != airline or offer.get("travel_date") == travel_date):
+                or airline_identity(offer) != airline or exact_same_query):
             continue
         for value in (offer.get("price_pln"), old.get("min_price_for_user")):
             if value is not None:
@@ -444,6 +478,8 @@ def send_due_alert(match, offer, monitor, connection):
     rules = monitor.get("telegram_rules") or {}
     stars = match["stars"]
     if not connection or stars < int(rules.get("min_stars") or 4):
+        return False
+    if "Powrót do potwierdzenia" in (offer.get("tags") or []):
         return False
     price = offer.get("price_pln") or 0
     budget = int((monitor.get("filters") or {}).get("budget_pln") or 999999)
@@ -501,8 +537,9 @@ def process_candidate(monitor, task, flight):
     rules = monitor.get("telegram_rules") or {}
     is_new_low = bool(current_price is not None and (previous_min is None or current_price < previous_min))
     is_new_airline = bool(airline and airline not in route_airlines)
+    round_trip_verified = "Powrót do potwierdzenia" not in (offer.get("tags") or [])
     match = {"user_id": monitor["user_id"], "monitor_id": monitor["id"], "offer_id": offer["id"], "stars": stars,
-             "telegram_eligible": (is_new_low or is_new_airline) and stars >= int(rules.get("min_stars") or 4),
+             "telegram_eligible": round_trip_verified and (is_new_low or is_new_airline) and stars >= int(rules.get("min_stars") or 4),
              "new_airline": is_new_airline,
              "min_price_for_user": min(prices) if prices else None}
     # Jeżeli alert nie został jeszcze wysłany (brak połączenia Telegram albo
@@ -542,11 +579,14 @@ def main():
             api("PATCH", "monitors", body={"status": "expired"}, params={"id": "eq." + monitor["id"]})
             continue
         active.append(monitor)
+    sync_errors = []
     for monitor in active:
         try:
             sync_monitor_scan_items(monitor)
         except Exception as exc:
-            log("Nie udało się odświeżyć kolejki monitora %s: %s" % (monitor["id"], str(exc)[:160]))
+            error = "Kolejka monitora %s: %s" % (monitor["id"], str(exc)[:160])
+            sync_errors.append(error)
+            log("Nie udało się odświeżyć kolejki monitora: %s" % error)
     if FORCE_SCAN:
         force_due_scan_items(active, now)
         log("Ręczny start: wymuszono sprawdzenie kolejki aktywnych monitorów")
@@ -569,13 +609,22 @@ def main():
     standard_tasks = [task for task in all_tasks if task["cabin"] != "first"][:limits["standard"]]
     tasks = standard_tasks + first_tasks
     log("Aktywne monitory: %d, zaległe kombinacje: %d, wybrane elementy: %d, zapytania w tym przebiegu: %d, limity: %d + %d First" % (len(active), len(all_due_items), len(due_items), len(tasks), limits["standard"], limits["first"]))
-    run = api("POST", "scan_runs", body={"query_count": len(tasks), "status": "running", "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False})[0]
+    run = None
+    if RESERVED_RUN_ID:
+        reserved = api("GET", "scan_runs", params={"id": "eq." + RESERVED_RUN_ID, "select": "*"})
+        run = reserved[0] if reserved else None
+        if run:
+            api("PATCH", "scan_runs", body={"status": "running", "query_count": 0, "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False, "error": None}, params={"id": "eq." + RESERVED_RUN_ID})
+    if not run:
+        run = api("POST", "scan_runs", body={"query_count": 0, "status": "running", "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False})[0]
     offers_count = 0
     sent_count = 0
-    task_errors = []
+    task_errors = list(sync_errors)
     blocked = False
+    executed_count = 0
     try:
         for task in tasks:
+            executed_count += 1
             try:
                 _level, flights = fetch_task(task)
             except gflights.BlockedError as exc:
@@ -619,10 +668,15 @@ def main():
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
-        api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "offer_count": offers_count, "status": "blocked" if blocked else ("partial" if task_errors else "ok"), "blocked": blocked, "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
+        final_status = "blocked" if blocked else ("partial" if task_errors else "ok")
+        api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": final_status, "blocked": blocked, "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
         log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
+        if blocked:
+            raise ScanBlockedRun("Google zablokował skan; kolejny przebieg pozostaje na bezpiecznym limicie")
+    except ScanBlockedRun:
+        raise
     except Exception as exc:
-        api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "offer_count": offers_count, "status": "error", "error": str(exc)[:500]}, params={"id": "eq." + run["id"]})
+        api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": "error", "error": str(exc)[:500]}, params={"id": "eq." + run["id"]})
         raise
 
 

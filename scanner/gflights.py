@@ -4,7 +4,7 @@
 
 Buduje parametr tfs (protobuf) przez fast-flights, pobiera stronę z cookie
 CONSENT=YES+cb (omija unijną ścianę zgody — Google renderuje wtedy wyniki
-po stronie serwera) i parsuje HTML parserem fast-flights.
+po stronie serwera) i parsuje serwerowy payload ds:1 własnym parserem.
 """
 
 import re
@@ -14,7 +14,8 @@ import urllib.request
 
 from fast_flights import FlightData, Passengers
 from fast_flights.filter import create_filter
-from fast_flights.core import parse_response
+
+import google_parser
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
@@ -39,11 +40,8 @@ class BlockedError(Exception):
     """Google pokazał consent wall / blokadę zamiast wyników."""
 
 
-class _FakeResponse(object):
-    def __init__(self, status_code, text):
-        self.status_code = status_code
-        self.text = text
-        self.text_markdown = text[:2000]
+class SourceParseError(RuntimeError):
+    """Google odpowiedział, ale format nie zawierał czytelnych danych."""
 
 
 def airline_code(name):
@@ -66,14 +64,6 @@ def build_url(origin, dest, date, seat="business", return_date=None):
         "tfs": filt.as_b64().decode(), "hl": "en",
         "curr": "PLN", "tfu": "EgQIABABIgA"})
     return "https://www.google.com/travel/flights?" + q
-
-
-def _parse_duration_h(s):
-    h = re.search(r"(\d+)\s*hr", s or "")
-    m = re.search(r"(\d+)\s*min", s or "")
-    if not h and not m:
-        return None
-    return round(int(h.group(1) if h else 0) + int(m.group(1) if m else 0) / 60, 1)
 
 
 def _parse_price_pln(s):
@@ -116,37 +106,45 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
         if exc.code in {403, 429, 503}:
             raise BlockedError("Google HTTP %s" % exc.code) from exc
         raise
-    body_head = body[:200000].lower()
+    # Nie szukamy markerów blokady w surowym JS: normalna strona Google ma
+    # ścieżki reCAPTCHA w kodzie, mimo że użytkownik nie widzi CAPTCHA.
+    visible_head = re.sub(r"<script\b[^>]*>.*?</script\s*>", " ", body[:800000], flags=re.I | re.S)
+    visible_head = re.sub(r"<style\b[^>]*>.*?</style\s*>", " ", visible_head, flags=re.I | re.S).lower()
     block_markers = ("before you continue", "captcha", "unusual traffic", "not a robot", "automated queries")
-    if status != 200 or any(marker in body_head for marker in block_markers):
+    if status != 200 or any(marker in visible_head for marker in block_markers):
         raise BlockedError("Google consent/CAPTCHA wall / status %s" % status)
     try:
-        result = parse_response(_FakeResponse(status, body))
-    except RuntimeError:
-        return None, []  # brak lotów na tej trasie/dacie — to nie błąd
+        parsed = google_parser.parse(body)
+    except google_parser.GoogleNoFlights as exc:
+        raise SourceParseError(str(exc)) from exc
+    except google_parser.GoogleParseError as exc:
+        # Nie oznaczamy zmienionego HTML jako "brak lotów". Taki przebieg musi
+        # trafić do statusu partial i zatrzymać automatyczne zwiększanie limitu.
+        raise SourceParseError(str(exc)) from exc
     flights = []
-    for fl in result.flights:
-        price = _parse_price_pln(fl.price)
+    for fl in parsed:
+        price = _parse_price_pln(str(fl.get("price_pln", "")))
         if not price:
             continue
-        stops = fl.stops if isinstance(fl.stops, int) else None
-        if stops is None:
-            stop_match = re.search(r"(\d+)\s*stop", str(fl.stops or ""), re.I)
-            stops = int(stop_match.group(1)) if stop_match else (0 if re.search(r"non[- ]?stop|direct", str(fl.stops or ""), re.I) else None)
-        duration_h = _parse_duration_h(fl.duration)
+        stops = fl.get("stops")
+        duration_h = fl.get("duration_h")
         if duration_h is None or stops is None:
             continue
+        airline_name = fl.get("airline_name", "")
         flights.append({
-            "airline_name": fl.name,
-            "airline": airline_code(fl.name),
+            "airline_name": airline_name,
+            "airline": airline_code(airline_name),
             "price_pln": price,
             "duration_h": duration_h,
             "stops": stops,
-            "departure": fl.departure,
-            "aircraft": getattr(fl, "aircraft", "") or getattr(fl, "aircraft_type", ""),
+            "departure": fl.get("departure", ""),
+            "aircraft": fl.get("aircraft", ""),
             "link": url,
+            "round_trip_verified": not bool(return_date),
         })
-    return result.current_price, flights
+    if not flights:
+        raise SourceParseError("Google zwrócił oferty bez wymaganej ceny/czasu/przesiadek")
+    return parsed[0].get("price_pln") if parsed else None, flights
 
 
 def _best_value(flights):

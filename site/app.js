@@ -7,6 +7,7 @@
   let client = null, user = null, profile = null, monitors = [], offers = [];
   let editingMonitorId = null, airportDataReady = false, offerOffset = 0, offersHaveMore = false, offersLoading = false;
   const OFFER_PAGE_SIZE = 40;
+  const MAX_MONITOR_COMBINATIONS = 5000;
 
   const AIRPORT_OVERRIDES = { GDN: "Gdańsk", WAW: "Warszawa", POZ: "Poznań", OSL: "Oslo", ARN: "Sztokholm", CPH: "Kopenhaga", VIE: "Wiedeń", BUD: "Budapeszt", MXP: "Mediolan", IST: "Stambuł", BKK: "Bangkok", SIN: "Singapur", KUL: "Kuala Lumpur", HKG: "Hongkong", HAN: "Hanoi", SGN: "Ho Chi Minh", HND: "Tokio (Haneda)", NRT: "Tokio (Narita)", ICN: "Seul" };
   const AIRPORTS = { ...AIRPORT_OVERRIDES };
@@ -163,7 +164,9 @@
       }
     }
     const total = pairs * origins * destinations * cabins;
-    $("monitorQueryEstimate").textContent = `${trip === "round_trip" ? "Kombinacji wylot/powrót" : "Dat do sprawdzenia"}: ${total.toLocaleString("pl-PL")}. Kolejka będzie rotowana między monitorami.`;
+    $("monitorQueryEstimate").textContent = total > MAX_MONITOR_COMBINATIONS
+      ? `Za dużo kombinacji: ${total.toLocaleString("pl-PL")} (maksymalnie ${MAX_MONITOR_COMBINATIONS.toLocaleString("pl-PL")}). Zawęź lotniska, daty albo klasy.`
+      : `${trip === "round_trip" ? "Kombinacji wylot/powrót" : "Dat do sprawdzenia"}: ${total.toLocaleString("pl-PL")}. Kolejka będzie rotowana między monitorami.`;
   }
 
   function openMonitorDialog(monitor = null) {
@@ -199,13 +202,15 @@
     const days = from && to ? Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1 : 0;
     if (!from || !to || from > to || days > 32) { $("formMessage").textContent = "Zakres dat jest nieprawidłowy (maksymalnie 32 dni)."; return; }
     const returnDays = returnFrom && returnTo ? Math.round((new Date(`${returnTo}T12:00:00`) - new Date(`${returnFrom}T12:00:00`)) / 86400000) + 1 : 0;
-    if (trip === "round_trip" && (!returnFrom || !returnTo || returnFrom > returnTo || returnDays > 32)) { $("formMessage").textContent = "Zakres powrotu jest nieprawidłowy (maksymalnie 32 dni)."; return; }
+    if (trip === "round_trip" && (!returnFrom || !returnTo || returnFrom > returnTo || returnDays > 32 || returnTo <= from || returnFrom > to)) { $("formMessage").textContent = "Zakres powrotu nie tworzy prawidłowej pary z wylotem."; return; }
+    const combinationUpperBound = (trip === "round_trip" ? days * returnDays : days) * origins.length * destinations.length * cabins.length;
+    if (combinationUpperBound > MAX_MONITOR_COMBINATIONS) { $("formMessage").textContent = `Monitor może wygenerować do ${combinationUpperBound.toLocaleString("pl-PL")} kombinacji. Maksymalnie można zapisać ${MAX_MONITOR_COMBINATIONS.toLocaleString("pl-PL")}.`; return; }
     if (!cabins.length || cabins.length > 4 || !budgetRaw || !stopsRaw || !starsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || (durationRaw && (!Number.isFinite(maxDuration) || maxDuration <= 0)) || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isInteger(telegramStars) || telegramStars < 3 || telegramStars > 5 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Wybierz co najmniej jedną klasę i uzupełnij wymagane kryteria. Maksymalny czas możesz pozostawić pusty, aby nie ograniczać długości połączenia."; return; }
     const excludedAirlines = csv($("monitorExcludedAirlines").value);
     const preferredAirlines = csv($("monitorPreferredAirlines").value);
     const f = { origins, destinations, from, to, trip_type: trip, return_from: trip === "round_trip" ? returnFrom : null, return_to: trip === "round_trip" ? returnTo : null, cabins, cabin: cabins[0], budget_pln: budget, max_duration_h: maxDuration, max_stops: maxStops, preferred_airlines: preferredAirlines, direct_only: $("monitorDirectOnly").checked, excluded_airlines: excludedAirlines };
     const r = { min_stars: telegramStars, drop_percent: telegramDrop, immediate_new_low: $("telegramImmediate").checked };
-    const payload = { name, filters: f, app_rules: { min_stars: 1 }, telegram_rules: r, expires_at: (f.return_to || f.to) || null };
+    const payload = { name, filters: f, app_rules: { min_stars: 1 }, telegram_rules: r, expires_at: f.to || null };
     let result;
     try {
       const refreshed = { ...payload, last_scanned_at: null, next_scan_at: new Date().toISOString() };
