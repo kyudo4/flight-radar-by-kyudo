@@ -133,6 +133,21 @@ def _card_labels(page):
     return labels
 
 
+def _click_card(page, label):
+    """Open a selected outbound card regardless of its current ARIA role."""
+    escaped = str(label).replace("\\", "\\\\").replace('"', '\\"')
+    candidates = (
+        page.get_by_role("link", name=label, exact=True),
+        page.get_by_role("button", name=label, exact=True),
+        page.locator('[aria-label="%s"]' % escaped),
+    )
+    for candidate in candidates:
+        if candidate.count():
+            candidate.first.click(timeout=15000)
+            return True
+    return False
+
+
 def _close():
     global _RUNTIME, _PLAYWRIGHT, _BROWSER, _CONTEXT, _PAGE
     for resource in (_PAGE, _CONTEXT, _BROWSER):
@@ -294,7 +309,8 @@ def fetch_rendered(url, return_date=None):
         # state.  Exact accessible name avoids brittle CSS classes.
         _load_cards(page, url)
         try:
-            page.get_by_role("link", name=outbound["_label"], exact=True).click(timeout=15000)
+            if not _click_card(page, outbound["_label"]):
+                raise BrowserParseError("Nie znaleziono wybranej karty wylotowej Google")
             page.get_by_role("heading", name="Returning flights", exact=True).wait_for(timeout=25000)
             return_url = page.url
             inbound_cards = _load_cards(page, return_url, returning=True)
