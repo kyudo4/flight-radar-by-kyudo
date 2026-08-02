@@ -37,12 +37,22 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: supabase functions deploy telegram-auth --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+        run: |
+          for attempt in 1 2 3; do
+            supabase functions deploy telegram-auth --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt && exit 0
+            test "$attempt" -lt 3 || exit 1
+            sleep $((attempt * 15))
+          done
       - name: Deploy administrator scan
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: supabase functions deploy admin-scan --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+        run: |
+          for attempt in 1 2 3; do
+            supabase functions deploy admin-scan --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt && exit 0
+            test "$attempt" -lt 3 || exit 1
+            sleep $((attempt * 15))
+          done
       - name: Configure Telegram webhook secrets
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
@@ -55,7 +65,12 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: supabase functions deploy telegram-feedback-webhook --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
+        run: |
+          for attempt in 1 2 3; do
+            supabase functions deploy telegram-feedback-webhook --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt && exit 0
+            test "$attempt" -lt 3 || exit 1
+            sleep $((attempt * 15))
+          done
       - name: Register and verify Telegram feedback webhook
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}

@@ -1109,6 +1109,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("telegram-feedback-webhook", deployment)
         self.assertIn("setWebhook", deployment)
         self.assertIn("TELEGRAM_WEBHOOK_SECRET", deployment)
+        self.assertEqual(deployment.count("for attempt in 1 2 3"), 3)
         self.assertIn("x-telegram-bot-api-secret-token", webhook)
         self.assertIn(".eq('id', matchId).eq('user_id', connection.data.user_id)", webhook)
         self.assertNotIn("Access-Control-Allow-Origin", webhook)
