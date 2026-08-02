@@ -287,8 +287,6 @@ declare
   stops integer;
   min_stars integer;
   drop_percent numeric;
-  min_nights integer;
-  max_nights integer;
 begin
   if length(trim(coalesce(new.name, ''))) < 1 or length(new.name) > 120 then
     raise exception 'Nazwa monitora musi mieć od 1 do 120 znaków';
@@ -308,8 +306,6 @@ begin
   duration_raw := nullif(trim(new.filters ->> 'max_duration_h'), '');
   duration := case when duration_raw is null then null else duration_raw::numeric end;
   stops := coalesce((new.filters ->> 'max_stops')::integer, 2);
-  min_nights := coalesce((new.filters ->> 'stay_min_nights')::integer, 1);
-  max_nights := coalesce((new.filters ->> 'stay_max_nights')::integer, 90);
   if origin_count < 1 or origin_count > 5 or destination_count < 1 or destination_count > 5 then
     raise exception 'Monitor może zawierać maksymalnie 5 lotnisk wylotu i 5 celów';
   end if;
@@ -330,9 +326,6 @@ begin
   end if;
   if trip = 'round_trip' and (return_from_date is null or return_to_date is null or return_to_date < return_from_date or return_to_date - return_from_date > 31) then
     raise exception 'Zakres dat powrotu może mieć maksymalnie 32 dni';
-  end if;
-  if trip = 'round_trip' and (min_nights < 1 or max_nights < min_nights or max_nights > 90) then
-    raise exception 'Nieprawidłowa długość pobytu';
   end if;
   if budget <= 0 or budget > 1000000 or (duration is not null and duration <= 0) or stops < 0 or stops > 9 then
     raise exception 'Nieprawidłowy limit czasu lub przesiadek';

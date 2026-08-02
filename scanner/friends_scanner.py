@@ -106,10 +106,8 @@ def valid_return_dates(filters, departure):
         return [None]
     return_from = parse_date(filters.get("return_from"))
     return_to = parse_date(filters.get("return_to") or filters.get("return_from"))
-    min_nights = max(1, int(filters.get("stay_min_nights") or 1))
-    max_nights = max(min_nights, int(filters.get("stay_max_nights") or 90))
     return [candidate for candidate in (return_from + timedelta(days=i) for i in range((return_to - return_from).days + 1))
-            if min_nights <= (candidate - departure).days <= max_nights]
+            if (candidate - departure).days >= 1]
 
 
 def monitor_combinations(monitor):

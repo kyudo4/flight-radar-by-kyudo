@@ -43,19 +43,18 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual({item["cabin"] for item in items}, {"business", "first"})
         self.assertEqual(len(items), 2)
 
-    def test_round_trip_monitor_materializes_only_valid_stay_pairs(self):
+    def test_round_trip_monitor_materializes_only_returns_after_departure(self):
         monitor = {
             "id": "monitor-round-trip",
             "filters": {
                 "origins": ["POZ"], "destinations": ["BKK"],
                 "from": "2026-09-01", "to": "2026-09-02",
                 "return_from": "2026-09-03", "return_to": "2026-09-04",
-                "stay_min_nights": 2, "stay_max_nights": 3,
                 "trip_type": "round_trip", "cabins": ["BUSINESS"],
             },
         }
         items = scanner.monitor_combinations(monitor)
-        self.assertEqual(len(items), 3)
+        self.assertEqual(len(items), 4)
         self.assertTrue(all(item["trip_type"] == "round_trip" for item in items))
         self.assertEqual({item["return_date"] for item in items}, {"2026-09-03", "2026-09-04"})
 

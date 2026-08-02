@@ -57,8 +57,8 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 
 - panel pokazuje tylko dokładne daty z monitoringu;
 - monitor może działać w trybie „w jedną stronę” albo „tam i z powrotem”. W drugim
-  trybie można podać osobny zakres powrotu oraz minimalną i maksymalną liczbę nocy;
-  Google dostaje oba odcinki w jednym zapytaniu;
+  trybie można podać osobny zakres dat powrotu; Google dostaje oba odcinki w jednym
+  zapytaniu, a system odrzuca powrót wcześniejszy lub tego samego dnia;
 - maksymalny czas i liczba przesiadek są sprawdzane przed zapisem dopasowania;
 - drugi termin tej samej trasy i linii nie trafia do panelu ani Telegrama, jeśli
   nie jest tańszy od wcześniejszej ceny; nowa linia jest traktowana jako nowe
