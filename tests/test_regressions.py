@@ -562,6 +562,22 @@ class FlightRadarRegressionTests(unittest.TestCase):
         preferred = scanner.score(flight, {"budget_pln": 6000, "preferred_airlines": ["Singapore Airlines"]})
         self.assertEqual(preferred, min(5, base + 1))
 
+    def test_market_price_can_upgrade_non_priority_airline(self):
+        flight = {"airline": "AY", "airline_name": "Finnair", "price_pln": 4500, "duration_h": 17.7, "stops": 1}
+        self.assertEqual(scanner.score(flight, {"budget_pln": 5000}), 3)
+        self.assertEqual(scanner.score(
+            flight, {"budget_pln": 5000}, market_prices=[4500, 6500, 7000, 8200]
+        ), 4)
+
+    def test_priority_airline_is_not_required_for_high_market_rating(self):
+        flight = {"airline": "AY", "airline_name": "Finnair", "price_pln": 3500, "duration_h": 14, "stops": 1}
+        self.assertEqual(scanner.score(
+            flight, {"budget_pln": 6000}, market_prices=[3500, 7000, 7600]
+        ), 5)
+
+    def test_sparse_market_data_does_not_overrate_one_observation(self):
+        self.assertIsNone(scanner.market_price_reference([4500, 7000]))
+
     def test_durable_bad_airline_signal_applies_across_monitors_and_dates(self):
         flight = {"airline": "CA", "airline_name": "Air China", "price_pln": 5000, "duration_h": 14, "stops": 1}
         filters = {"budget_pln": 6000}

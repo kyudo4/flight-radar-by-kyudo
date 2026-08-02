@@ -5,6 +5,7 @@ import html
 import json
 import math
 import os
+import statistics
 import time
 import urllib.error
 import urllib.parse
@@ -545,12 +546,51 @@ def preference_adjustment(flight, filters, preferences=None, route="", destinati
     return 0
 
 
-def score(flight, filters, feedback=None, preferences=None, route="", destination="", cabin=""):
+def market_price_reference(market_prices):
+    """Return a route/cabin benchmark only when enough live observations exist.
+
+    One isolated fare is not a market benchmark. Three or more observations
+    from the same Google query or the same route history are the minimum
+    needed to avoid turning a sparse result into an overconfident five-star
+    rating.
+    """
+    values = []
+    for value in market_prices or []:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            values.append(number)
+    return statistics.median(values) if len(values) >= 3 else None
+
+
+def market_price_stars(price, market_prices):
+    reference = market_price_reference(market_prices)
+    if not reference or price <= 0:
+        return 0
+    ratio = float(price) / reference
+    if ratio <= 0.65:
+        return 5
+    if ratio <= 0.82:
+        return 4
+    if ratio <= 1.00:
+        return 3
+    if ratio <= 1.15:
+        return 2
+    return 1
+
+
+def score(flight, filters, feedback=None, preferences=None, route="", destination="", cabin="", market_prices=None):
     price = flight.get("price_pln") or 999999
     budget = int(filters.get("budget_pln") or 999999)
     stars = 5 if price <= budget * .55 else 4 if price <= budget * .75 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
+    # A priority carrier is only a small preference bonus, not proof that the
+    # fare is good. The route/cabin market comparison can independently
+    # upgrade a genuinely cheap fare operated by a non-priority airline.
     if flight.get("airline") in PRIORITY:
         stars = min(5, stars + 1)
+    stars = max(stars, market_price_stars(price, market_prices))
     preferred = {str(value).strip().upper() for value in filters.get("preferred_airlines", []) if str(value).strip()}
     airline_code = str(flight.get("airline") or "").strip().upper()
     airline_name = str(flight.get("airline_name") or "").strip().upper()
@@ -740,7 +780,7 @@ def send_due_alert(match, offer, monitor, connection):
     return True
 
 
-def process_candidate(monitor, task, flight, previous=None, preferences=None):
+def process_candidate(monitor, task, flight, previous=None, preferences=None, market_prices=None):
     filters = monitor.get("filters") or {}
     if not quality(flight, filters) or not budget_ok(flight, filters):
         return 0, 0
@@ -752,6 +792,7 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None):
     trip_type_value = task.get("trip_type") or ("round_trip" if return_date else "one_way")
     airline = airline_identity(flight)
     previous_prices = []
+    route_prices = list(market_prices or [])
     matching_feedback = []
     route_airlines = set()
     for old in previous if airline else []:
@@ -761,6 +802,9 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None):
         old_trip = old_offer.get("trip_type") or ("round_trip" if old_offer.get("return_date") else "one_way")
         if old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value:
             route_airlines.add(old_airline)
+            for value in (old_offer.get("price_pln"), old.get("min_price_for_user")):
+                if value is not None:
+                    route_prices.append(value)
         if old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value and old_offer.get("return_date") == return_date and old_airline == airline:
             if old.get("feedback"):
                 matching_feedback.append(old["feedback"])
@@ -780,6 +824,7 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None):
         matching_feedback if preferences is None else None,
         preferences=preferences, route=route,
         destination=task["dest"], cabin=cabin,
+        market_prices=route_prices,
     )
     rules = monitor.get("telegram_rules") or {}
     is_new_low = bool(current_price is not None and (previous_min is None or current_price < previous_min))
@@ -944,6 +989,7 @@ def main():
                             added, sent = process_candidate(
                                 monitor, task, flight, history_cache[monitor["id"]],
                                 preference_cache[user_id],
+                                market_prices=[item.get("price_pln") for item in flights],
                             )
                             offers_count += added; sent_count += sent
                         except Exception as exc:
