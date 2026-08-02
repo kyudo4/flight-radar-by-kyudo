@@ -210,6 +210,66 @@ class FlightRadarRegressionTests(unittest.TestCase):
         cards = google_browser._load_cards(FakePage(), "https://google.test")
         self.assertEqual(cards[0]["price_pln"], 2894)
 
+    def test_rendered_fallback_dismisses_google_consent_wall(self):
+        label = (
+            "From 3,026 Polish zlotys. 2 stops flight with Scandinavian Airlines and Qatar Airways. "
+            "Leaves Gdansk Airport at 10:15 AM and arrives at Osaka Airport at 4:25 PM. "
+            "Total duration 22 hr 10 min. Select flight"
+        )
+
+        class Locator:
+            def __init__(self, page, kind): self.page = page; self.kind = kind; self.first = self
+            def count(self):
+                if self.kind == "reject": return 1 if self.page.consent else 0
+                if self.kind == "cards": return 0 if self.page.consent else 1
+                return 1
+            def click(self, timeout=None): self.page.consent = False
+            def wait_for(self, timeout=None): return None
+            def get_attribute(self, _): return label if self.kind == "cards" else ""
+            def nth(self, _): return self
+            def inner_text(self, timeout=None):
+                return "Before you continue to Google" if self.page.consent else "Search results"
+
+        class ConsentPage:
+            def __init__(self): self.consent = True
+            def goto(self, *args, **kwargs): pass
+            def get_by_role(self, role, **kwargs):
+                if role == "button" and kwargs.get("name") == "Reject all": return Locator(self, "reject")
+                if role == "heading": return Locator(self, "heading")
+                return Locator(self, "cards")
+            def locator(self, selector):
+                if selector == "body": return Locator(self, "body")
+                return Locator(self, "cards")
+            def wait_for_load_state(self, *args, **kwargs): pass
+            def wait_for_timeout(self, _): pass
+
+        page = ConsentPage()
+        cards = google_browser._load_cards(page, "https://google.test")
+        self.assertFalse(page.consent)
+        self.assertEqual(cards[0]["price_pln"], 3026)
+
+    def test_round_trip_picker_forces_click_on_accessible_card(self):
+        class Candidate:
+            def __init__(self): self.first = self; self.force = None
+            def count(self): return 1
+            def click(self, timeout=None, force=False): self.force = force
+
+        class Page:
+            def __init__(self): self.candidate = Candidate()
+            def get_by_role(self, role, **kwargs): return self.candidate
+            def locator(self, selector): return self.candidate
+
+        page = Page()
+        self.assertTrue(google_browser._click_card(page, "complete flight label"))
+        self.assertTrue(page.candidate.force)
+
+    def test_scan_fails_when_every_google_query_has_source_error(self):
+        source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn("successful_google_tasks = 0", source)
+        self.assertIn("failed_google_tasks = 0", source)
+        self.assertIn("successful_google_tasks == 0", source)
+        self.assertIn("source_degraded or source_unavailable", source)
+
     def test_explicit_no_flights_is_not_a_source_failure(self):
         class NoFlightPage:
             def goto(self, *args, **kwargs): pass

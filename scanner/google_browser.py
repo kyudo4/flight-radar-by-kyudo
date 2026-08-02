@@ -146,6 +146,34 @@ def _visible_body_text(page):
         return ""
 
 
+def _dismiss_consent(page):
+    """Close Google's current consent interstitial before reading results.
+
+    The legacy ``CONSENT=YES+cb`` cookie is no longer sufficient on every
+    Google edge.  GitHub runners can therefore receive a perfectly valid
+    consent page instead of flight cards.  Prefer the privacy-preserving
+    ``Reject all`` action and keep ``Accept all`` only as a compatibility
+    fallback for layouts that do not expose the reject button.
+    """
+    body = _visible_body_text(page)
+    if "before you continue to google" not in body:
+        return False
+    for label in ("Reject all", "Accept all"):
+        try:
+            button = page.get_by_role("button", name=label, exact=True)
+            if not button.count():
+                continue
+            button.first.click(timeout=15000)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                page.wait_for_timeout(1000)
+            return True
+        except Exception:
+            continue
+    raise BrowserBlockedError("Google pokazał ekran zgody bez obsługiwanego przycisku")
+
+
 def _wait_for_cards(page, timeout_ms=25000):
     """Wait for cards instead of sampling the DOM immediately after the heading.
 
@@ -190,7 +218,11 @@ def _click_card(page, label):
     )
     for candidate in candidates:
         if candidate.count():
-            candidate.first.click(timeout=15000)
+            # Google places clickable duration/price descendants over the
+            # accessible card container.  A normal Playwright click is then
+            # rejected as "pointer events intercepted" even though the card
+            # is visible and uniquely identified by its complete label.
+            candidate.first.click(timeout=15000, force=True)
             return True
     return False
 
@@ -259,6 +291,7 @@ def _load_cards(page, url, returning=False):
         try:
             _consume_query_slot()
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            _dismiss_consent(page)
             heading = "Returning flights" if returning else "Search results"
             try:
                 page.get_by_role("heading", name=heading, exact=True).wait_for(timeout=25000)

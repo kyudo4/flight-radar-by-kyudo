@@ -865,6 +865,8 @@ def main():
     blocked = False
     executed_count = 0
     source_errors_in_row = 0
+    successful_google_tasks = 0
+    failed_google_tasks = 0
     source_degraded = False
     source_capacity_reached = False
     runtime_limit_reached = False
@@ -906,8 +908,10 @@ def main():
                 task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
                 log("Pominięto zapytanie po błędzie źródła: %s" % task_errors[-1])
                 source_errors_in_row += 1
+                failed_google_tasks += 1
                 task_failed = True
             else:
+                successful_google_tasks += 1
                 related = [m for m in active if m["id"] in task["monitor_ids"]]
                 preferred_codes = set(PRIORITY)
                 for monitor in related:
@@ -965,12 +969,13 @@ def main():
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
-        final_status = "blocked" if blocked else ("error" if source_degraded else ("partial" if task_errors or source_capacity_reached or runtime_limit_reached else "ok"))
+        source_unavailable = executed_count > 0 and failed_google_tasks > 0 and successful_google_tasks == 0
+        final_status = "blocked" if blocked else ("error" if source_degraded or source_unavailable else ("partial" if task_errors or source_capacity_reached or runtime_limit_reached else "ok"))
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": final_status, "blocked": blocked, "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
         log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
         if blocked:
             raise ScanBlockedRun("Google zablokował skan; kolejny przebieg pozostaje na bezpiecznym limicie")
-        if source_degraded:
+        if source_degraded or source_unavailable:
             raise ScanSourceRun("Google zmienił lub zwrócił uszkodzoną strukturę danych; skan został bezpiecznie zatrzymany")
     except ScanBlockedRun:
         raise
