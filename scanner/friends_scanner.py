@@ -264,10 +264,17 @@ def offer_fingerprint(task, flight):
 
 def quality(flight, filters):
     duration = flight.get("duration_h")
-    max_duration = float(filters.get("max_duration_h") or 24)
-    if duration is None and max_duration:
+    raw_max_duration = filters.get("max_duration_h")
+    if raw_max_duration in (None, ""):
+        max_duration = None
+    else:
+        try:
+            max_duration = float(raw_max_duration)
+        except (TypeError, ValueError):
+            return False
+    if duration is None and max_duration is not None:
         return False
-    if duration is not None and duration > max_duration:
+    if duration is not None and max_duration is not None and duration > max_duration:
         return False
     max_stops = filters.get("max_stops")
     if max_stops is not None and flight.get("stops") is None:

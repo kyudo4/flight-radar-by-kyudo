@@ -163,6 +163,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertFalse(scanner.quality({"duration_h": 12, "stops": None}, filters))
         self.assertTrue(scanner.quality({"duration_h": 12, "stops": 1}, filters))
         self.assertFalse(scanner.quality({"duration_h": 24.1, "stops": 1}, filters))
+        self.assertTrue(scanner.quality({"duration_h": 42, "stops": 1}, {"max_stops": 2}))
+        self.assertTrue(scanner.quality({"duration_h": None, "stops": 1}, {"max_stops": 2}))
 
     def test_budget_is_a_hard_limit_even_for_error_fares(self):
         filters = {"budget_pln": 4500}
@@ -397,6 +399,18 @@ class FlightRadarRegressionTests(unittest.TestCase):
             self.assertIn(path, checks)
         self.assertIn("Run pre-deploy verification", pages)
         self.assertIn("python -m unittest discover -s tests -v", pages)
+
+    def test_duration_limit_is_optional_and_unlimited_by_default(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        html = (ROOT / "site" / "index.html").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260802000100_unlimited_duration.sql").read_text()
+        self.assertIn('placeholder="Bez limitu"', html)
+        self.assertIn('durationRaw ? Number(durationRaw) : null', app)
+        self.assertIn('durationLabel = f.max_duration_h ? `maks.', app)
+        self.assertNotIn('maxDuration > 24', app)
+        self.assertIn('duration is not null and duration <= 0', migration)
+        self.assertNotIn('duration > 24', migration)
+        self.assertIn("where filters ? 'max_duration_h'", migration)
 
     def test_google_block_uses_circuit_breaker(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()

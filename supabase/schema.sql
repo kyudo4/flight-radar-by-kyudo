@@ -271,6 +271,7 @@ declare
   destination_count integer;
   budget numeric;
   duration numeric;
+  duration_raw text;
   stops integer;
   min_stars integer;
   drop_percent numeric;
@@ -287,7 +288,8 @@ begin
   origin_count := jsonb_array_length(coalesce(new.filters -> 'origins', '[]'::jsonb));
   destination_count := jsonb_array_length(coalesce(new.filters -> 'destinations', '[]'::jsonb));
   budget := coalesce((new.filters ->> 'budget_pln')::numeric, 0);
-  duration := coalesce((new.filters ->> 'max_duration_h')::numeric, 24);
+  duration_raw := nullif(trim(new.filters ->> 'max_duration_h'), '');
+  duration := case when duration_raw is null then null else duration_raw::numeric end;
   stops := coalesce((new.filters ->> 'max_stops')::integer, 2);
   if origin_count < 1 or origin_count > 5 or destination_count < 1 or destination_count > 5 then
     raise exception 'Monitor może zawierać maksymalnie 5 lotnisk wylotu i 5 celów';
@@ -304,7 +306,7 @@ begin
   if from_date is null or to_date is null or to_date < from_date or to_date - from_date > 31 then
     raise exception 'Zakres dat monitora może mieć maksymalnie 32 dni';
   end if;
-  if budget <= 0 or budget > 1000000 or duration <= 0 or duration > 24 or stops < 0 or stops > 9 then
+  if budget <= 0 or budget > 1000000 or (duration is not null and duration <= 0) or stops < 0 or stops > 9 then
     raise exception 'Nieprawidłowy limit czasu lub przesiadek';
   end if;
   if new.filters ? 'cabins' then
