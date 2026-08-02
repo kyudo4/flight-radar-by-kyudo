@@ -78,10 +78,29 @@ create table public.flight_offers (
   departure text,
   aircraft text,
   tags jsonb not null default '[]'::jsonb,
+  verification_status text not null default 'verified' check (verification_status in ('verified', 'pending_return', 'stale')),
+  verification_note text not null default '',
   link text not null default '',
   raw jsonb not null default '{}'::jsonb,
   first_seen_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now()
+);
+
+create table public.offer_price_history (
+  id bigint generated always as identity primary key,
+  offer_id uuid not null references public.flight_offers(id) on delete cascade,
+  price_pln integer not null check (price_pln > 0),
+  observed_at timestamptz not null default now()
+);
+
+create table public.offer_mutes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null check (kind in ('offer', 'airline', 'route')),
+  value text not null,
+  label text not null default '',
+  created_at timestamptz not null default now(),
+  unique (user_id, kind, value)
 );
 
 create table public.user_matches (
@@ -151,6 +170,8 @@ create unique index monitor_scan_items_one_way_key on public.monitor_scan_items(
 create unique index monitor_scan_items_round_trip_key on public.monitor_scan_items(monitor_id, origin, destination, travel_date, return_date, cabin) where return_date is not null and trip_type = 'round_trip';
 create index offers_route_date_idx on public.flight_offers(origin, destination, travel_date, cabin);
 create index offers_round_trip_date_idx on public.flight_offers(origin, destination, travel_date, return_date, cabin);
+create index offer_price_history_offer_idx on public.offer_price_history(offer_id, observed_at desc);
+create index offer_mutes_user_idx on public.offer_mutes(user_id, kind, value);
 create index matches_user_idx on public.user_matches(user_id, updated_at desc);
 create index scan_runs_started_idx on public.scan_runs(started_at desc);
 create index telegram_auth_attempts_lookup_idx on public.telegram_auth_attempts(telegram_user_id, attempted_at desc);
@@ -531,6 +552,8 @@ alter table public.invites enable row level security;
 alter table public.monitors enable row level security;
 alter table public.monitor_scan_items enable row level security;
 alter table public.flight_offers enable row level security;
+alter table public.offer_price_history enable row level security;
+alter table public.offer_mutes enable row level security;
 alter table public.user_matches enable row level security;
 alter table public.telegram_connections enable row level security;
 alter table public.telegram_state enable row level security;
@@ -546,6 +569,8 @@ create policy profiles_admin_delete on public.profiles for delete to authenticat
 create policy invites_admin_all on public.invites for all to authenticated using (public.is_admin()) with check (public.is_admin());
 create policy monitors_owner_all on public.monitors for all to authenticated using (public.is_active_user(user_id) and user_id = auth.uid()) with check (public.is_active_user(user_id) and user_id = auth.uid());
 create policy offers_matched_owner_read on public.flight_offers for select to authenticated using (public.can_read_flight_offer(id));
+create policy offer_price_history_owner_read on public.offer_price_history for select to authenticated using (public.can_read_flight_offer(offer_id));
+create policy offer_mutes_owner_all on public.offer_mutes for all to authenticated using (public.is_active_user(user_id) and user_id = auth.uid()) with check (public.is_active_user(user_id) and user_id = auth.uid());
 create policy matches_owner_read on public.user_matches for select to authenticated using (public.is_active_user(user_id) and user_id = auth.uid() and public.match_within_monitor_budget(id));
 create policy matches_owner_update on public.user_matches for update to authenticated using (public.is_active_user(user_id) and user_id = auth.uid() and public.match_within_monitor_budget(id)) with check (public.is_active_user(user_id) and user_id = auth.uid() and public.match_within_monitor_budget(id));
 create policy connections_self_read on public.telegram_connections for select to authenticated using (public.is_active_user(user_id) and user_id = auth.uid());

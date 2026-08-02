@@ -75,7 +75,7 @@ Deno.serve(async (request) => {
       }
       return json({ error: 'GitHub nie przyjął żądania uruchomienia skanu.' }, corsHeaders, 502);
     }
-    return json({ ok: true }, corsHeaders, 202);
+    return json({ ok: true, run_id: reservedRun }, corsHeaders, 202);
   } catch (error) {
     console.error('admin-scan failed', error);
     return json({ error: 'Nie udało się uruchomić skanu.' }, corsHeaders, 500);

@@ -7,7 +7,9 @@ alter table public.monitor_scan_items
 
 alter table public.flight_offers
   add column if not exists return_date date,
-  add column if not exists trip_type text not null default 'one_way';
+  add column if not exists trip_type text not null default 'one_way',
+  add column if not exists verification_status text not null default 'verified',
+  add column if not exists verification_note text not null default '';
 
 alter table public.scan_runs
   add column if not exists standard_limit integer,
@@ -26,6 +28,10 @@ alter table public.flight_offers
   drop constraint if exists flight_offers_trip_type_check;
 alter table public.flight_offers
   add constraint flight_offers_trip_type_check check (trip_type in ('one_way', 'round_trip'));
+alter table public.flight_offers
+  drop constraint if exists flight_offers_verification_status_check;
+alter table public.flight_offers
+  add constraint flight_offers_verification_status_check check (verification_status in ('verified', 'pending_return', 'stale'));
 
 create unique index if not exists monitor_scan_items_one_way_key
   on public.monitor_scan_items(monitor_id, origin, destination, travel_date, cabin)
@@ -39,6 +45,38 @@ create index if not exists monitor_scan_items_round_trip_queue_idx
   on public.monitor_scan_items(monitor_id, travel_date, return_date, cabin, next_scan_at);
 create index if not exists offers_round_trip_date_idx
   on public.flight_offers(origin, destination, travel_date, return_date, cabin);
+
+create table if not exists public.offer_price_history (
+  id bigint generated always as identity primary key,
+  offer_id uuid not null references public.flight_offers(id) on delete cascade,
+  price_pln integer not null check (price_pln > 0),
+  observed_at timestamptz not null default now()
+);
+
+create table if not exists public.offer_mutes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null check (kind in ('offer', 'airline', 'route')),
+  value text not null,
+  label text not null default '',
+  created_at timestamptz not null default now(),
+  unique (user_id, kind, value)
+);
+alter table public.offer_mutes add column if not exists label text not null default '';
+
+create index if not exists offer_price_history_offer_idx on public.offer_price_history(offer_id, observed_at desc);
+create index if not exists offer_mutes_user_idx on public.offer_mutes(user_id, kind, value);
+
+alter table public.offer_price_history enable row level security;
+alter table public.offer_mutes enable row level security;
+
+drop policy if exists offer_price_history_owner_read on public.offer_price_history;
+create policy offer_price_history_owner_read on public.offer_price_history
+for select to authenticated using (public.can_read_flight_offer(offer_id));
+drop policy if exists offer_mutes_owner_all on public.offer_mutes;
+create policy offer_mutes_owner_all on public.offer_mutes
+for all to authenticated using (public.is_active_user(user_id) and user_id = auth.uid())
+with check (public.is_active_user(user_id) and user_id = auth.uid());
 
 create or replace function public.validate_monitor_filters()
 returns trigger language plpgsql set search_path = public as $$

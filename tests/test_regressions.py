@@ -82,6 +82,19 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(flights[0]["stops"], 0)
         self.assertEqual(flights[0]["airline_name"], "Qatar Airways")
 
+    def test_google_parser_only_verifies_round_trip_when_return_leg_is_present(self):
+        outbound = [None, None, "Qatar", "POZ", "Poznań Airport", "Bangkok", "BKK", None,
+                    [6], None, [8, 30], 150, [], 1, "", [], 3, "A350", None, 0,
+                    [2026, 9, 1], [2026, 9, 1]]
+        inbound = list(outbound)
+        inbound[3], inbound[6] = "BKK", "POZ"
+        inbound[8], inbound[10] = [10], [18, 30]
+        inbound[20], inbound[21] = [2026, 9, 14], [2026, 9, 14]
+        payload = [None, None, None, [[[["business", ["Qatar Airways"], [outbound, inbound]], [[0, 4500]]]]]]
+        html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+        flights = google_parser.parse(html, origin="POZ", destination="BKK", return_date="2026-09-14")
+        self.assertTrue(flights[0]["round_trip_verified"])
+
     def test_round_trip_queue_has_a_safe_combination_cap(self):
         monitor = {"id": "large-round-trip", "filters": {
             "origins": ["GDN", "WAW", "POZ", "VIE", "MXP"],
@@ -608,6 +621,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("/actions/workflows/${workflow}/dispatches", function)
         self.assertIn("reserve_scan_slot", function)
         self.assertIn("reserved_run_id", function)
+        self.assertIn("run_id: reservedRun", function)
         self.assertNotIn("'Access-Control-Allow-Origin': '*'", function)
         self.assertIn("workflow_dispatch", workflow)
         self.assertIn("reserved_run_id:", workflow)
@@ -627,7 +641,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260802-7', html)
+        self.assertIn('app.js?v=20260802-8', html)
         self.assertIn('styles.css?v=20260802-5', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
@@ -641,6 +655,19 @@ class FlightRadarRegressionTests(unittest.TestCase):
         styles = (ROOT / "site" / "styles.css").read_text()
         self.assertIn(".user-row .secondary,.user-row .danger", styles)
         self.assertIn("font-size:12px", styles)
+
+    def test_quality_features_are_wired_across_scanner_database_and_panel(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260802000300_quality_history_mutes.sql").read_text()
+        self.assertIn("offer_price_history", app)
+        self.assertIn("offer_mutes", app)
+        self.assertIn("offer_price_history", scanner_source)
+        self.assertIn("mark_stale_offers", scanner_source)
+        self.assertIn("offer_mutes", scanner_source)
+        self.assertIn("offer_price_history", migration)
+        self.assertIn("offer_mutes", migration)
+        self.assertIn("scanHistory", (ROOT / "site" / "index.html").read_text())
 
     def test_telegram_bootstrap_password_fits_bcrypt_limit(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()

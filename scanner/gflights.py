@@ -114,7 +114,7 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
     if status != 200 or any(marker in visible_head for marker in block_markers):
         raise BlockedError("Google consent/CAPTCHA wall / status %s" % status)
     try:
-        parsed = google_parser.parse(body)
+        parsed = google_parser.parse(body, origin=origin, destination=dest, return_date=return_date)
     except google_parser.GoogleNoFlights as exc:
         raise SourceParseError(str(exc)) from exc
     except google_parser.GoogleParseError as exc:
@@ -140,7 +140,7 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
             "departure": fl.get("departure", ""),
             "aircraft": fl.get("aircraft", ""),
             "link": url,
-            "round_trip_verified": not bool(return_date),
+            "round_trip_verified": bool(fl.get("round_trip_verified", not bool(return_date))),
         })
     if not flights:
         raise SourceParseError("Google zwrócił oferty bez wymaganej ceny/czasu/przesiadek")

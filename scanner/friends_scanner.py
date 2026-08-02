@@ -37,8 +37,10 @@ PROCESS_TELEGRAM_ONLY = os.environ.get("PROCESS_TELEGRAM_ONLY", "false").lower()
 RESERVED_RUN_ID = os.environ.get("RESERVED_RUN_ID", "").strip()
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))
 FETCH_RETRIES = 2
+STALE_AFTER_HOURS = 24
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
 AIRPORTS_FILE = Path(__file__).resolve().parents[1] / "site" / "airports.json"
+MUTE_CACHE = {}
 
 
 def load_airport_codes():
@@ -263,6 +265,45 @@ def adaptive_query_limits():
     return limits
 
 
+def mark_stale_offers():
+    """Oznacza ceny, których Google nie potwierdził przez dobę jako nieaktualne."""
+    cutoff = (datetime.utcnow() - timedelta(hours=STALE_AFTER_HOURS)).isoformat() + "Z"
+    try:
+        api("PATCH", "flight_offers", body={"verification_status": "stale", "verification_note": "Brak potwierdzenia ceny od ponad 24 godzin"},
+            params={"last_seen_at": "lt." + cutoff, "verification_status": "neq.stale"})
+    except Exception as exc:
+        # Stara baza bez migracji nie może zatrzymać skanera.
+        log("Nie udało się oznaczyć starych ofert: %s" % str(exc)[:120])
+
+
+def fetch_user_mutes(user_id):
+    if user_id in MUTE_CACHE:
+        return MUTE_CACHE[user_id]
+    try:
+        rows = api("GET", "offer_mutes", params={"user_id": "eq." + user_id, "select": "kind,value"})
+    except Exception as exc:
+        log("Nie udało się odczytać wyciszeń użytkownika: %s" % str(exc)[:120])
+        rows = []
+    MUTE_CACHE[user_id] = rows
+    return rows
+
+
+def offer_is_muted(user_id, offer, offer_id):
+    route = str(offer.get("route") or "")
+    code = str(offer.get("airline") or "").strip().upper()
+    name = " ".join(str(offer.get("airline_name") or "").upper().split())
+    for mute in fetch_user_mutes(user_id):
+        value = str(mute.get("value") or "")
+        kind = mute.get("kind")
+        if kind == "offer" and value == str(offer_id):
+            return True
+        if kind == "route" and value == route:
+            return True
+        if kind == "airline" and value in {code, name}:
+            return True
+    return False
+
+
 def fetch_task(task):
     """Ponawia tylko błędy sieciowe; blokadę Google zgłasza od razu."""
     last_error = None
@@ -420,9 +461,17 @@ def save_offer(task, flight):
     tags = list(flight.get("tags") or [])
     if trip_type_value == "round_trip" and not flight.get("round_trip_verified", False) and "Powrót do potwierdzenia" not in tags:
         tags.append("Powrót do potwierdzenia")
-    payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "return_date": task.get("return_date"), "trip_type": trip_type_value, "cabin": task["cabin"].upper().replace("-", "_"), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": tags, "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
+    verification_status = "verified" if trip_type_value == "one_way" and flight.get("round_trip_verified", True) else "pending_return"
+    verification_note = "" if verification_status == "verified" else "Google nie udostępnił jeszcze szczegółów odcinka powrotnego"
+    payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "return_date": task.get("return_date"), "trip_type": trip_type_value, "cabin": task["cabin"].upper().replace("-", "_"), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": tags, "verification_status": verification_status, "verification_note": verification_note, "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
     rows = api("POST", "flight_offers", body=payload, params={"on_conflict": "fingerprint"})
-    return rows[0] if rows else api("GET", "flight_offers", params={"fingerprint": "eq." + payload["fingerprint"], "select": "*"})[0]
+    offer = rows[0] if rows else api("GET", "flight_offers", params={"fingerprint": "eq." + payload["fingerprint"], "select": "*"})[0]
+    try:
+        if flight.get("price_pln"):
+            api("POST", "offer_price_history", body={"offer_id": offer["id"], "price_pln": int(flight["price_pln"])})
+    except Exception as exc:
+        log("Nie udało się zapisać historii ceny: %s" % str(exc)[:120])
+    return offer
 
 
 def alert_text(offer, stars, match_id):
@@ -529,6 +578,8 @@ def process_candidate(monitor, task, flight):
         # Nowy dzień tej samej trasy i linii nie jest nową okazją, jeśli kosztuje tyle samo lub więcej.
         return 0, 0
     offer = save_offer(task, flight)
+    if offer_is_muted(monitor["user_id"], {**flight, "route": route}, offer["id"]):
+        return 1, 0
     row = next((x for x in previous if x["offer_id"] == offer["id"]), None)
     current_price = flight.get("price_pln")
     previous_min = min(previous_prices) if previous_prices else None
@@ -568,6 +619,7 @@ def main():
     if PROCESS_TELEGRAM_ONLY:
         log("Przetworzono kolejkę odpowiedzi Telegrama")
         return
+    mark_stale_offers()
     now = datetime.utcnow()
     active_profiles = api("GET", "profiles", params={"status": "eq.active", "select": "id", "limit": "20"})
     active_ids = [row["id"] for row in active_profiles]

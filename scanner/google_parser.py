@@ -44,7 +44,7 @@ def _script_text(html):
     raise GoogleParseError("Google nie zwrócił danych ds:1")
 
 
-def parse(html):
+def parse(html, origin=None, destination=None, return_date=None):
     script = _script_text(html)
     try:
         data = script.split("data:", 1)[1].rsplit(",", 1)[0]
@@ -80,6 +80,17 @@ def parse(html):
                 plane = segment[17] if len(segment) > 17 else ""
                 if plane and plane not in aircraft:
                     aircraft.append(str(plane))
+            return_verified = not return_date
+            if return_date and origin and destination:
+                for segment in segments:
+                    segment_origin = segment[3] if len(segment) > 3 else ""
+                    segment_destination = segment[6] if len(segment) > 6 else ""
+                    segment_date = segment[20] if len(segment) > 20 else None
+                    if (str(segment_origin).upper() == str(destination).upper()
+                            and str(segment_destination).upper() == str(origin).upper()
+                            and _date(segment_date) == tuple(int(part) for part in str(return_date).split("-"))):
+                        return_verified = True
+                        break
             flights.append({
                 "airline_name": " / ".join(airlines),
                 "price_pln": price,
@@ -88,6 +99,7 @@ def parse(html):
                 "departure": "%02d:%02d – %02d:%02d" % (departure_dt.hour, departure_dt.minute, arrival_dt.hour, arrival_dt.minute),
                 "aircraft": " / ".join(aircraft),
                 "segments": len(segments),
+                "round_trip_verified": return_verified,
             })
         except (IndexError, KeyError, TypeError, ValueError, OverflowError):
             continue

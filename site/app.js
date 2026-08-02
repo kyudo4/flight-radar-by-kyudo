@@ -4,7 +4,7 @@
   const esc = value => String(value ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[c]));
   const safeHref = value => /^https?:\/\//i.test(String(value || "")) ? esc(value) : "#";
   const configReady = cfg.supabaseUrl && cfg.supabaseAnonKey && !String(cfg.supabaseUrl).includes("YOUR_") && !String(cfg.supabaseAnonKey).includes("YOUR_");
-  let client = null, user = null, profile = null, monitors = [], offers = [];
+  let client = null, user = null, profile = null, monitors = [], offers = [], mutes = [], priceHistory = {};
   let editingMonitorId = null, airportDataReady = false, offerOffset = 0, offersHaveMore = false, offersLoading = false;
   const OFFER_PAGE_SIZE = 40;
   const MAX_MONITOR_COMBINATIONS = 5000;
@@ -102,7 +102,7 @@
     ["monitorFrom", "monitorTo", "monitorReturnFrom", "monitorReturnTo"].forEach(id => $(id).oninput = () => { updateDateConstraints(); updateMonitorEstimate(); });
     $("refreshButton").onclick = async () => { await loadMonitors(); await loadOffers(true); };
     $("loadMoreOffersButton").onclick = () => loadOffers(false);
-    ["offerSearch", "offerCabinFilter", "offerStarsFilter", "offerSort"].forEach(id => $(id).oninput = renderOffers);
+    ["offerSearch", "offerCabinFilter", "offerStarsFilter", "offerFreshnessFilter", "offerSort"].forEach(id => $(id).oninput = renderOffers);
   }
 
   function renderBlocked() {
@@ -271,7 +271,7 @@
     offersLoading = true;
     const button = $("loadMoreOffersButton");
     button.disabled = true;
-    if (reset) { offerOffset = 0; offers = []; }
+    if (reset) { offerOffset = 0; offers = []; priceHistory = {}; }
     const from = offerOffset;
     const to = from + OFFER_PAGE_SIZE - 1;
     try {
@@ -287,10 +287,19 @@
       let offerRows = [];
       if (offerIds.length) {
         const { data, error } = await client.from("flight_offers")
-          .select("id,route,origin,destination,travel_date,return_date,trip_type,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags")
+          .select("id,fingerprint,route,origin,destination,travel_date,return_date,trip_type,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags,last_seen_at,verification_status,verification_note")
           .in("id", offerIds);
         if (error) throw error;
         offerRows = data || [];
+      }
+      if (reset) {
+        const { data: muteRows, error: muteError } = await client.from("offer_mutes").select("id,kind,value,label").eq("user_id", user.id).order("created_at", { ascending: false });
+        // The additive migration may still be waiting to be applied.
+        mutes = muteError ? [] : (muteRows || []);
+      }
+      if (offerIds.length) {
+        const { data: historyRows, error: historyError } = await client.from("offer_price_history").select("offer_id,price_pln,observed_at").in("offer_id", offerIds).order("observed_at", { ascending: true });
+        if (!historyError) for (const row of historyRows || []) (priceHistory[row.offer_id] ||= []).push(row);
       }
       const byId = new Map(offerRows.map(offer => [offer.id, offer]));
       const page = matchRows.map(match => ({ ...match, flight_offers: byId.get(match.offer_id) || null }));
@@ -298,6 +307,7 @@
       offerOffset += matchRows.length;
       offersHaveMore = matchRows.length === OFFER_PAGE_SIZE;
       show("loadMoreOffersButton", offersHaveMore);
+      renderMutes();
       renderOffers();
       const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: 4 razy na dobę</span>`;
     } finally {
@@ -309,6 +319,7 @@
     const query = String($("offerSearch")?.value || "").trim().toLowerCase();
     const cabin = $("offerCabinFilter")?.value || "";
     const minStars = Number($("offerStarsFilter")?.value || 0);
+    const freshness = $("offerFreshnessFilter")?.value || "fresh";
     const sort = $("offerSort")?.value || "newest";
     const filtered = offers.filter(match => {
       const offer = offerData(match);
@@ -316,6 +327,10 @@
       const monitor = monitors.find(item => item.id === match.monitor_id);
       const budget = Number(monitor?.filters?.budget_pln);
       if (!monitor || !Number.isFinite(budget) || budget <= 0 || Number(offer.price_pln) > budget) return false;
+      if (isOfferMuted(offer)) return false;
+      const stale = isOfferStale(offer);
+      if (freshness === "fresh" && stale) return false;
+      if (freshness === "stale" && !stale) return false;
       const haystack = `${offer.route || ""} ${routeName(offer.route)} ${offer.airline_name || ""} ${offer.source || ""}`.toLowerCase();
       const normalizedCabin = String(offer.cabin || "").replace("-", "_");
       return (!query || haystack.includes(query)) && (!cabin || normalizedCabin === cabin) && Number(match.stars || 0) >= minStars;
@@ -328,8 +343,26 @@
     $("offerCount").textContent = offers.length ? `Pokazano ${filtered.length} z ${offers.length}` : "";
     $("offerList").innerHTML = filtered.length ? filtered.map(renderOffer).join("") : `<div class="empty">${offers.length ? "Brak ofert mieszczących się w budżecie i pozostałych filtrach." : "Brak dopasowanych ofert. Skaner uzupełni je po uruchomieniu własnego monitoringu."}</div>`;
     document.querySelectorAll("[data-feedback]").forEach(btn => btn.onclick = () => sendFeedback(btn.dataset.feedback, btn.dataset.match));
+    document.querySelectorAll("[data-mute-kind]").forEach(btn => btn.onclick = () => muteOffer(btn.dataset.match, btn.dataset.muteKind));
   }
-  function renderOffer(m) { const o = offerData(m); const mins = Number(o.duration_minutes || 0); const duration = mins ? `${Math.floor(mins / 60)}h ${mins % 60}m` : "—"; const tags = (o.tags || []).map(tag => `<span class="tag">${esc(tag)}</span>`).join(""); const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : ""; const dates = o.return_date ? `${dateFmt(o.travel_date)} → ${dateFmt(o.return_date)}` : dateFmt(o.travel_date); return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dates}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${duration} · ${o.stops === 0 ? "bez przesiadek" : `${o.stops ?? "?"} przes.`}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`; }
+  function isOfferStale(offer) { return offer.verification_status === "stale" || (offer.last_seen_at && Date.now() - new Date(offer.last_seen_at).getTime() > 24 * 3600000); }
+  function isOfferMuted(offer) { const route = String(offer.route || ""), code = String(offer.airline || "").toUpperCase(), name = String(offer.airline_name || "").toUpperCase().replace(/\s+/g, " "); return mutes.some(mute => (mute.kind === "offer" && mute.value === offer.id) || (mute.kind === "route" && mute.value === route) || (mute.kind === "airline" && [code, name].includes(mute.value))); }
+  function renderPriceHistory(offer) {
+    const rows = (priceHistory[offer.id] || []).filter(row => Number(row.price_pln) > 0).slice(-12);
+    if (!rows.length) return "";
+    const prices = rows.map(row => Number(row.price_pln));
+    const min = Math.min(...prices), max = Math.max(...prices), span = Math.max(1, max - min);
+    const bars = rows.map(row => {
+      const level = Math.max(1, Math.min(10, Math.round(((Number(row.price_pln) - min) / span) * 9) + 1));
+      return `<span class="price-history-bar" data-level="${level}" title="${Number(row.price_pln).toLocaleString("pl-PL")} PLN"></span>`;
+    }).join("");
+    const trend = prices[prices.length - 1] < prices[0] ? "↓ taniej" : prices[prices.length - 1] > prices[0] ? "↑ drożej" : "→ bez zmiany";
+    return `<div class="price-history"><span>Historia ceny: ${min.toLocaleString("pl-PL")}–${max.toLocaleString("pl-PL")} PLN · ${trend}</span><span class="price-history-bars" aria-label="Historia ceny">${bars}</span></div>`;
+  }
+  function renderOffer(m) { const o = offerData(m); const mins = Number(o.duration_minutes || 0); const duration = mins ? `${Math.floor(mins / 60)}h ${mins % 60}m` : "—"; const stale = isOfferStale(o); const tags = [...(o.tags || []), ...(stale ? ["Cena niepotwierdzona"] : []), ...(o.verification_status === "pending_return" ? ["Powrót do potwierdzenia"] : [])].filter((tag, index, all) => all.indexOf(tag) === index).map(tag => `<span class="tag">${esc(tag)}</span>`).join(""); const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : ""; const dates = o.return_date ? `${dateFmt(o.travel_date)} → ${dateFmt(o.return_date)}` : dateFmt(o.travel_date); return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dates}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${duration} · ${o.stops === 0 ? "bez przesiadek" : `${o.stops ?? "?"} przes.`}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}${renderPriceHistory(o)}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><div class="offer-mute-actions"><button data-mute-kind="offer" data-match="${m.id}">Wycisz ofertę</button><button data-mute-kind="airline" data-match="${m.id}">Wycisz linię</button><button data-mute-kind="route" data-match="${m.id}">Wycisz trasę</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`; }
+  function renderMutes() { const el = $("muteList"); if (!el) return; el.innerHTML = mutes.length ? `<span>Wyciszone:</span> ${mutes.map(mute => `<button class="mute-chip" data-unmute="${mute.id}">${esc(mute.label || mute.value)} ×</button>`).join("")}` : ""; document.querySelectorAll("[data-unmute]").forEach(btn => btn.onclick = () => unmute(btn.dataset.unmute)); }
+  async function muteOffer(matchId, kind) { const match = offers.find(item => item.id === matchId), offer = offerData(match); if (!offer?.id) return; const value = kind === "offer" ? offer.id : kind === "route" ? offer.route : (offer.airline || String(offer.airline_name || "").toUpperCase().replace(/\s+/g, " ")); const label = kind === "offer" ? `${routeName(offer.route)} · ${offer.airline_name}` : kind === "route" ? routeName(offer.route) : offer.airline_name; const { error } = await client.from("offer_mutes").upsert({ user_id: user.id, kind, value, label }, { onConflict: "user_id,kind,value" }); if (error) { alert(error.message); return; } await loadOffers(true); }
+  async function unmute(id) { const { error } = await client.from("offer_mutes").delete().eq("id", id).eq("user_id", user.id); if (error) { alert(error.message); return; } await loadOffers(true); }
   async function sendFeedback(verdict, matchId) { const { error } = await client.from("feedback").upsert({ user_id: user.id, match_id: matchId, verdict }, { onConflict: "user_id,match_id" }); if (error) { alert(error.message); return; } const updated = await client.from("user_matches").update({ feedback: verdict }).eq("id", matchId).eq("user_id", user.id); if (updated.error) { alert(updated.error.message); return; } const label = { buy: "Kupiłbym", expensive: "Za drogo", skip: "Pominięto" }[verdict] || verdict; alert(`Zapisano: ${label}`); }
   async function signInWithTelegram() {
     const button = $("telegramLoginButton");
@@ -373,7 +406,9 @@
     document.querySelectorAll("[data-action='delete-user']").forEach(btn => btn.onclick = async () => { if (!confirm("Usunąć konto, jego monitory i alerty? Tego nie można cofnąć.")) return; const result = await client.rpc("admin_delete_profile", { target_id: btn.dataset.user }); if (result.error || result.data !== true) alert(result.error?.message || "Nie usunięto konta."); else await loadAdmin(); });
     $("inviteButton").onclick = createInvite;
     $("scanNowButton").onclick = requestImmediateScan;
+    await loadScanStatus();
   }
+  async function loadScanStatus() { const { data, error } = await client.from("scan_runs").select("id,started_at,finished_at,query_count,standard_limit,first_limit,blocked,offer_count,status,error").order("started_at", { ascending: false }).limit(8); if (error) { $("scanStatus").textContent = "Brak danych o skanach."; return null; } const rows = data || [], latest = rows[0]; $("scanStatus").innerHTML = latest ? `<strong>Ostatni skan: ${esc(latest.status)}</strong> · ${esc(dateTimeFmt(latest.started_at))} · zapytań: ${latest.query_count || 0} · ofert: ${latest.offer_count || 0}${latest.error ? `<br><span class="status-suspended">${esc(latest.error)}</span>` : ""}` : "Brak uruchomionych skanów."; $("scanHistory").innerHTML = rows.length ? `<h3>Historia skanów</h3>${rows.map(row => `<div class="scan-row"><span class="status-${row.status === "ok" ? "active" : "suspended"}">${esc(row.status)}</span><span>${esc(dateTimeFmt(row.started_at))}</span><span>${row.query_count || 0} zapytań · ${row.offer_count || 0} ofert</span></div>`).join("")}` : ""; return latest; }
   async function requestImmediateScan() {
     const button = $("scanNowButton"), output = $("scanNowMessage");
     button.disabled = true; output.textContent = "Uruchamianie skanu…"; output.className = "message";
@@ -387,13 +422,16 @@
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || "Nie udało się uruchomić skanu.");
-      output.textContent = "Skan uruchomiony. Wyniki pojawią się po jego zakończeniu."; output.className = "message good";
+      output.textContent = "Skan jest w kolejce. Status będzie aktualizowany automatycznie."; output.className = "message good";
+      loadScanStatus();
+      pollScanStatus(body.run_id || null);
     } catch (error) {
       output.textContent = error.message || "Nie udało się uruchomić skanu."; output.className = "message";
     } finally {
       window.setTimeout(() => { button.disabled = false; }, 4000);
     }
   }
+  async function pollScanStatus(runId) { for (let attempt = 0; attempt < 24; attempt++) { await new Promise(resolve => window.setTimeout(resolve, 5000)); const latest = await loadScanStatus(); if (!latest || (runId && latest.id !== runId)) continue; if (["ok", "partial", "blocked", "error"].includes(latest.status)) { const output = $("scanNowMessage"); output.textContent = `Skan zakończony: ${latest.status}. Zapytania: ${latest.query_count || 0}, oferty: ${latest.offer_count || 0}.`; output.className = latest.status === "ok" ? "message good" : "message"; return; } } }
   async function copyInviteLink(link, button) {
     let copied = false;
     try {
