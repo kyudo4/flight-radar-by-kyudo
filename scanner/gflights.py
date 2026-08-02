@@ -54,10 +54,14 @@ def airline_code(name):
     return ""
 
 
-def build_url(origin, dest, date, seat="business"):
+def build_url(origin, dest, date, seat="business", return_date=None):
+    legs = [FlightData(date=date, from_airport=origin, to_airport=dest)]
+    trip = "one-way"
+    if return_date:
+        legs.append(FlightData(date=return_date, from_airport=dest, to_airport=origin))
+        trip = "round-trip"
     filt = create_filter(
-        flight_data=[FlightData(date=date, from_airport=origin, to_airport=dest)],
-        trip="one-way", seat=seat, passengers=Passengers(adults=1))
+        flight_data=legs, trip=trip, seat=seat, passengers=Passengers(adults=1))
     q = urllib.parse.urlencode({
         "tfs": filt.as_b64().decode(), "hl": "en",
         "curr": "PLN", "tfu": "EgQIABABIgA"})
@@ -94,9 +98,9 @@ def _parse_price_pln(s):
         return None
 
 
-def fetch_gf(origin, dest, date, seat="business", timeout=35):
+def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
     """Zwraca (price_level, [dict na lot]). Rzuca BlockedError przy blokadzie."""
-    url = build_url(origin, dest, date, seat)
+    url = build_url(origin, dest, date, seat, return_date=return_date)
     req = urllib.request.Request(url)
     req.add_header("User-Agent", UA)
     req.add_header("Accept", "text/html,application/xhtml+xml")

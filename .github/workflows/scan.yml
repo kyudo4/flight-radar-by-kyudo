@@ -2,7 +2,7 @@ name: Flight Radar by Kyudo scan
 
 on:
   schedule:
-    - cron: "17 */3 * * *"
+    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -28,5 +28,10 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          MAX_STANDARD_QUERIES: "240"
+          MAX_FIRST_QUERIES: "12"
+          MAX_STANDARD_CEILING: "400"
+          MAX_FIRST_CEILING: "24"
+          GOOGLE_REQUEST_DELAY_SECONDS: "1.5"
           FORCE_SCAN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
         run: python scanner/friends_scanner.py

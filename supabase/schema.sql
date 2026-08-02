@@ -51,11 +51,12 @@ create table public.monitor_scan_items (
   origin text not null,
   destination text not null,
   travel_date date not null,
+  return_date date,
+  trip_type text not null default 'one_way' check (trip_type in ('one_way', 'round_trip')),
   cabin text not null,
   last_scanned_at timestamptz,
   next_scan_at timestamptz not null default now(),
-  created_at timestamptz not null default now(),
-  unique (monitor_id, origin, destination, travel_date, cabin)
+  created_at timestamptz not null default now()
 );
 
 create table public.flight_offers (
@@ -66,6 +67,8 @@ create table public.flight_offers (
   origin text not null,
   destination text not null,
   travel_date date not null,
+  return_date date,
+  trip_type text not null default 'one_way' check (trip_type in ('one_way', 'round_trip')),
   cabin text not null,
   airline text not null default '',
   airline_name text not null default '',
@@ -124,6 +127,9 @@ create table public.scan_runs (
   started_at timestamptz not null default now(),
   finished_at timestamptz,
   query_count integer not null default 0,
+  standard_limit integer,
+  first_limit integer,
+  blocked boolean not null default false,
   offer_count integer not null default 0,
   status text not null default 'running',
   error text
@@ -141,7 +147,10 @@ create table public.feedback (
 create index monitors_queue_idx on public.monitors(status, next_scan_at);
 create index monitor_scan_queue_idx on public.monitor_scan_items(next_scan_at, last_scanned_at);
 create index monitor_scan_monitor_idx on public.monitor_scan_items(monitor_id);
+create unique index monitor_scan_items_one_way_key on public.monitor_scan_items(monitor_id, origin, destination, travel_date, cabin) where return_date is null and trip_type = 'one_way';
+create unique index monitor_scan_items_round_trip_key on public.monitor_scan_items(monitor_id, origin, destination, travel_date, return_date, cabin) where return_date is not null and trip_type = 'round_trip';
 create index offers_route_date_idx on public.flight_offers(origin, destination, travel_date, cabin);
+create index offers_round_trip_date_idx on public.flight_offers(origin, destination, travel_date, return_date, cabin);
 create index matches_user_idx on public.user_matches(user_id, updated_at desc);
 create index scan_runs_started_idx on public.scan_runs(started_at desc);
 create index telegram_auth_attempts_lookup_idx on public.telegram_auth_attempts(telegram_user_id, attempted_at desc);
@@ -267,6 +276,9 @@ returns trigger language plpgsql set search_path = public as $$
 declare
   from_date date;
   to_date date;
+  return_from_date date;
+  return_to_date date;
+  trip text;
   origin_count integer;
   destination_count integer;
   budget numeric;
@@ -275,6 +287,8 @@ declare
   stops integer;
   min_stars integer;
   drop_percent numeric;
+  min_nights integer;
+  max_nights integer;
 begin
   if length(trim(coalesce(new.name, ''))) < 1 or length(new.name) > 120 then
     raise exception 'Nazwa monitora musi mieć od 1 do 120 znaków';
@@ -285,12 +299,17 @@ begin
   end if;
   from_date := (new.filters ->> 'from')::date;
   to_date := (new.filters ->> 'to')::date;
+  return_from_date := nullif(new.filters ->> 'return_from', '')::date;
+  return_to_date := nullif(new.filters ->> 'return_to', '')::date;
+  trip := coalesce(nullif(new.filters ->> 'trip_type', ''), 'one_way');
   origin_count := jsonb_array_length(coalesce(new.filters -> 'origins', '[]'::jsonb));
   destination_count := jsonb_array_length(coalesce(new.filters -> 'destinations', '[]'::jsonb));
   budget := coalesce((new.filters ->> 'budget_pln')::numeric, 0);
   duration_raw := nullif(trim(new.filters ->> 'max_duration_h'), '');
   duration := case when duration_raw is null then null else duration_raw::numeric end;
   stops := coalesce((new.filters ->> 'max_stops')::integer, 2);
+  min_nights := coalesce((new.filters ->> 'stay_min_nights')::integer, 1);
+  max_nights := coalesce((new.filters ->> 'stay_max_nights')::integer, 90);
   if origin_count < 1 or origin_count > 5 or destination_count < 1 or destination_count > 5 then
     raise exception 'Monitor może zawierać maksymalnie 5 lotnisk wylotu i 5 celów';
   end if;
@@ -305,6 +324,15 @@ begin
   end if;
   if from_date is null or to_date is null or to_date < from_date or to_date - from_date > 31 then
     raise exception 'Zakres dat monitora może mieć maksymalnie 32 dni';
+  end if;
+  if trip not in ('one_way', 'round_trip') then
+    raise exception 'Nieprawidłowy typ podróży';
+  end if;
+  if trip = 'round_trip' and (return_from_date is null or return_to_date is null or return_to_date < return_from_date or return_to_date - return_from_date > 31) then
+    raise exception 'Zakres dat powrotu może mieć maksymalnie 32 dni';
+  end if;
+  if trip = 'round_trip' and (min_nights < 1 or max_nights < min_nights or max_nights > 90) then
+    raise exception 'Nieprawidłowa długość pobytu';
   end if;
   if budget <= 0 or budget > 1000000 or (duration is not null and duration <= 0) or stops < 0 or stops > 9 then
     raise exception 'Nieprawidłowy limit czasu lub przesiadek';

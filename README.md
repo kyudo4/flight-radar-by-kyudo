@@ -9,9 +9,10 @@ jej stanu, tokenów Telegrama ani historii alertów.
 
 - `site/` — statyczny panel GitHub Pages (HTML/CSS/JS);
 - `supabase/schema.sql` — prywatna baza użytkowników, monitorów, ofert i alertów;
-- `monitor_scan_items` — trwała kolejka każdej konkretnej trasy, daty i klasy;
+- `monitor_scan_items` — trwała kolejka każdej konkretnej trasy, daty, klasy i —
+  dla podróży tam i z powrotem — pary wylot/powrót;
 - `scanner/` — skaner Python uruchamiany przez GitHub Actions;
-- `.github/workflows/scan.yml` — wspólny skan co 3 godziny;
+- `.github/workflows/scan.yml` — wspólny skan 4 razy na dobę (co 6 godzin);
 - `.github/workflows/telegram-feedback.yml` — odbiór reakcji z Telegrama co 5 minut;
 - Google Flights — wspólny kolektor z kontrolowanym limitem zapytań i retry dla przejściowych błędów;
 - RSS źródeł promocyjnych — Secret Flying, Fly4Free, LoyaltyLobby, OMAAT, Travel Dealz, View From The Wing, FlyerTalk i Reddit;
@@ -55,6 +56,9 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 ## Zachowanie ofert
 
 - panel pokazuje tylko dokładne daty z monitoringu;
+- monitor może działać w trybie „w jedną stronę” albo „tam i z powrotem”. W drugim
+  trybie można podać osobny zakres powrotu oraz minimalną i maksymalną liczbę nocy;
+  Google dostaje oba odcinki w jednym zapytaniu;
 - maksymalny czas i liczba przesiadek są sprawdzane przed zapisem dopasowania;
 - drugi termin tej samej trasy i linii nie trafia do panelu ani Telegrama, jeśli
   nie jest tańszy od wcześniejszej ceny; nowa linia jest traktowana jako nowe
@@ -89,8 +93,8 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 
 ## Limit skanera
 
-Scheduler deduplikuje identyczne zapytania użytkowników. W jednym przebiegu
-wybiera domyślnie maksymalnie 60 zapytań standardowych i 4 First. Pozycje kolejki
+Scheduler deduplikuje identyczne zapytania użytkowników. Cztery przebiegi na dobę
+startują od maksymalnie 240 zapytań standardowych i 12 First na przebieg. Pozycje kolejki
 są wybierane rotacyjnie między monitorami, żeby jeden użytkownik nie zablokował
 pozostałych. W puli standardowej Business, Economy i Premium Economy również
 rotują między sobą; nie ma sztywnego limitu Economy, więc niewykorzystane miejsca
@@ -98,11 +102,14 @@ przechodzą do klas, które mają zadania. Identyczne zadania są wykonywane tyl
 Kolejka jest stronicowana,
 więc duża liczba monitorów nie ucina jej po pierwszych 20 000 rekordów.
 
-Limity można zmienić zmiennymi środowiskowymi `MAX_STANDARD_QUERIES`,
-`MAX_FIRST_QUERIES` i `GOOGLE_REQUEST_DELAY_SECONDS`. Domyślne 64 zapytania na
-przebieg co 3 godziny oznaczają około 2,5 dnia na pełny obieg monitora
-10 × 9 × 14 bez First; przy wielu różnych monitorach czas rośnie proporcjonalnie.
-Nie należy usuwać opóźnienia ani zwiększać limitów bez obserwacji blokad Google.
+Po trzech zdrowych przebiegach limit automatycznie rośnie o 40 standardowych i 2 First,
+aż do 400 + 24. Po pierwszym 403/429/503, CAPTCHA albo consent wall bieżący przebieg
+kończy się natychmiast, a kolejny schodzi co najmniej o połowę (nie ma bezmyślnego
+ponawiania zablokowanego żądania). Historia limitów i blokad jest zapisana w `scan_runs`.
+Opóźnienie między zapytaniami pozostaje włączone. Wartości można zmienić przez
+`MAX_STANDARD_QUERIES`, `MAX_FIRST_QUERIES`, `MAX_STANDARD_CEILING`,
+`MAX_FIRST_CEILING`, `QUERY_RAMP_STANDARD_STEP`, `QUERY_RAMP_FIRST_STEP` oraz
+`GOOGLE_REQUEST_DELAY_SECONDS`.
 
 ## Testy lokalne
 

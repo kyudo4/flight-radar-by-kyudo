@@ -85,6 +85,8 @@
     $("newMonitorButton").onclick = () => openMonitorDialog();
     $("closeDialog").onclick = $("cancelDialog").onclick = () => $("monitorDialog").close();
     $("monitorForm").onsubmit = saveMonitor;
+    $("monitorTripType").onchange = updateRoundTripFields;
+    ["monitorFrom", "monitorTo", "monitorReturnFrom", "monitorReturnTo", "monitorStayMin", "monitorStayMax"].forEach(id => $(id).oninput = updateMonitorEstimate);
     $("refreshButton").onclick = async () => { await loadMonitors(); await loadOffers(true); };
     $("loadMoreOffersButton").onclick = () => loadOffers(false);
     ["offerSearch", "offerCabinFilter", "offerStarsFilter", "offerSort"].forEach(id => $(id).oninput = renderOffers);
@@ -128,7 +130,40 @@
     const nextScan = m.status === "active" ? `Następny skan: ${dateTimeFmt(m.next_scan_at)}` : "Skan wstrzymany";
     const airlineRules = [(f.preferred_airlines || []).length ? `Preferowane: ${(f.preferred_airlines || []).join(", ")}` : "", (f.excluded_airlines || []).length ? `Wykluczone: ${(f.excluded_airlines || []).join(", ")}` : ""].filter(Boolean).join(" · ");
     const durationLabel = f.max_duration_h ? `maks. ${esc(f.max_duration_h)}h` : "bez limitu czasu";
-    return `<article class="monitor-card"><div><h3>${esc(m.name)}</h3><div class="card-meta">${esc(route)} · ${esc(cabinLabel || "—")} · ${dateFmt(f.from)}–${dateFmt(f.to)}</div></div><div class="card-meta">Do ${esc(f.budget_pln ?? "—")} PLN · ${durationLabel} · Telegram od ${esc(r.min_stars ?? "—")}⭐</div>${airlineRules ? `<div class="card-meta">${esc(airlineRules)}</div>` : ""}<div class="card-meta">Ostatni skan: ${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
+    const dateLabel = f.trip_type === "round_trip" ? `${dateFmt(f.from)}–${dateFmt(f.to)} · powrót ${dateFmt(f.return_from)}–${dateFmt(f.return_to)}` : `${dateFmt(f.from)}–${dateFmt(f.to)}`;
+    return `<article class="monitor-card"><div><h3>${esc(m.name)}</h3><div class="card-meta">${esc(route)} · ${esc(cabinLabel || "—")} · ${esc(dateLabel)}</div></div><div class="card-meta">Do ${esc(f.budget_pln ?? "—")} PLN · ${durationLabel} · Telegram od ${esc(r.min_stars ?? "—")}⭐</div>${airlineRules ? `<div class="card-meta">${esc(airlineRules)}</div>` : ""}<div class="card-meta">Ostatni skan: ${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
+  }
+
+  function updateRoundTripFields() {
+    const roundTrip = $("monitorTripType").value === "round_trip";
+    show("roundTripFields", roundTrip);
+    ["monitorReturnFrom", "monitorReturnTo", "monitorStayMin", "monitorStayMax"].forEach(id => $(id).required = roundTrip && id.startsWith("monitorReturn"));
+    updateMonitorEstimate();
+  }
+
+  function updateMonitorEstimate() {
+    const from = $("monitorFrom")?.value, to = $("monitorTo")?.value;
+    const trip = $("monitorTripType")?.value || "one_way";
+    const origins = csv($("monitorOrigins")?.value || "").length;
+    const destinations = csv($("monitorDestinations")?.value || "").length;
+    const cabins = document.querySelectorAll("input[name='monitorCabin']:checked").length || 1;
+    if (!from || !to || from > to || !origins || !destinations) { $("monitorQueryEstimate").textContent = ""; return; }
+    const days = Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1;
+    let pairs = days;
+    if (trip === "round_trip") {
+      const returnFrom = $("monitorReturnFrom")?.value, returnTo = $("monitorReturnTo")?.value;
+      const minNights = Number($("monitorStayMin")?.value || 1), maxNights = Number($("monitorStayMax")?.value || 90);
+      if (!returnFrom || !returnTo || returnFrom > returnTo) { $("monitorQueryEstimate").textContent = "Wybierz zakres powrotu, aby zobaczyć skalę skanu."; return; }
+      pairs = 0;
+      for (let departure = new Date(`${from}T12:00:00`); departure <= new Date(`${to}T12:00:00`); departure.setDate(departure.getDate() + 1)) {
+        for (let back = new Date(`${returnFrom}T12:00:00`); back <= new Date(`${returnTo}T12:00:00`); back.setDate(back.getDate() + 1)) {
+          const nights = Math.round((back - departure) / 86400000);
+          if (nights >= minNights && nights <= maxNights) pairs++;
+        }
+      }
+    }
+    const total = pairs * origins * destinations * cabins;
+    $("monitorQueryEstimate").textContent = `${trip === "round_trip" ? "Kombinacji wylot/powrót" : "Dat do sprawdzenia"}: ${total.toLocaleString("pl-PL")}. Kolejka będzie rotowana między monitorami.`;
   }
 
   function openMonitorDialog(monitor = null) {
@@ -138,20 +173,25 @@
     $("monitorDialogTitle").textContent = editingMonitorId ? "Zmień własne kryteria" : "Ustaw własne kryteria";
     $("monitorName").value = monitor?.name || "";
     $("monitorOrigins").value = (f.origins || []).join(", "); $("monitorDestinations").value = (f.destinations || []).join(", ");
+    $("monitorTripType").value = f.trip_type || "one_way";
     $("monitorFrom").value = f.from || ""; $("monitorTo").value = f.to || "";
+    $("monitorReturnFrom").value = f.return_from || ""; $("monitorReturnTo").value = f.return_to || "";
+    $("monitorStayMin").value = f.stay_min_nights || 1; $("monitorStayMax").value = f.stay_max_nights || 90;
     const selectedCabins = monitorCabins(f); document.querySelectorAll("input[name='monitorCabin']").forEach(input => { input.checked = selectedCabins.includes(input.value); }); $("monitorBudget").value = f.budget_pln || "";
     $("monitorDuration").value = f.max_duration_h || ""; $("monitorStops").value = Number.isInteger(f.max_stops) ? f.max_stops : "";
     $("monitorPreferredAirlines").value = (f.preferred_airlines || []).join(", ");
     $("monitorExcludedAirlines").value = (f.excluded_airlines || []).join(", "); $("monitorDirectOnly").checked = Boolean(f.direct_only);
     $("telegramStars").value = r.min_stars || ""; $("telegramDrop").value = r.drop_percent || ""; $("telegramImmediate").checked = Boolean(r.immediate_new_low);
-    $("formMessage").textContent = ""; $("monitorDialog").showModal();
+    $("formMessage").textContent = ""; updateRoundTripFields(); $("monitorDialog").showModal();
   }
 
   async function saveMonitor(e) {
     e.preventDefault(); if (!editingMonitorId && monitors.length >= 2) { $("formMessage").textContent = "Limit dwóch monitorów na osobę."; return; }
     const name = $("monitorName").value.trim();
     const origins = csv($("monitorOrigins").value), destinations = csv($("monitorDestinations").value);
-    const from = $("monitorFrom").value, to = $("monitorTo").value;
+    const trip = $("monitorTripType").value, from = $("monitorFrom").value, to = $("monitorTo").value;
+    const returnFrom = $("monitorReturnFrom").value, returnTo = $("monitorReturnTo").value;
+    const stayMin = Number($("monitorStayMin").value || 1), stayMax = Number($("monitorStayMax").value || 90);
     const cabins = [...document.querySelectorAll("input[name='monitorCabin']:checked")].map(input => input.value), budgetRaw = $("monitorBudget").value.trim(), durationRaw = $("monitorDuration").value.trim(), stopsRaw = $("monitorStops").value.trim();
     const starsRaw = $("telegramStars").value, dropRaw = $("telegramDrop").value.trim();
     const budget = Number(budgetRaw), maxDuration = durationRaw ? Number(durationRaw) : null, maxStops = Number(stopsRaw), telegramStars = Number(starsRaw), telegramDrop = Number(dropRaw);
@@ -160,12 +200,14 @@
     if (!validIata(origins) || !validIata(destinations) || origins.length > 5 || destinations.length > 5) { $("formMessage").textContent = "Wpisz od 1 do 5 prawidłowych kodów lotnisk IATA po każdej stronie."; return; }
     const days = from && to ? Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1 : 0;
     if (!from || !to || from > to || days > 32) { $("formMessage").textContent = "Zakres dat jest nieprawidłowy (maksymalnie 32 dni)."; return; }
+    const returnDays = returnFrom && returnTo ? Math.round((new Date(`${returnTo}T12:00:00`) - new Date(`${returnFrom}T12:00:00`)) / 86400000) + 1 : 0;
+    if (trip === "round_trip" && (!returnFrom || !returnTo || returnFrom > returnTo || returnDays > 32 || !Number.isInteger(stayMin) || !Number.isInteger(stayMax) || stayMin < 1 || stayMax < stayMin || stayMax > 90)) { $("formMessage").textContent = "Zakres powrotu lub długość pobytu jest nieprawidłowa."; return; }
     if (!cabins.length || cabins.length > 4 || !budgetRaw || !stopsRaw || !starsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || (durationRaw && (!Number.isFinite(maxDuration) || maxDuration <= 0)) || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isInteger(telegramStars) || telegramStars < 3 || telegramStars > 5 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Wybierz co najmniej jedną klasę i uzupełnij wymagane kryteria. Maksymalny czas możesz pozostawić pusty, aby nie ograniczać długości połączenia."; return; }
     const excludedAirlines = csv($("monitorExcludedAirlines").value);
     const preferredAirlines = csv($("monitorPreferredAirlines").value);
-    const f = { origins, destinations, from, to, cabins, cabin: cabins[0], budget_pln: budget, max_duration_h: maxDuration, max_stops: maxStops, preferred_airlines: preferredAirlines, direct_only: $("monitorDirectOnly").checked, excluded_airlines: excludedAirlines };
+    const f = { origins, destinations, from, to, trip_type: trip, return_from: trip === "round_trip" ? returnFrom : null, return_to: trip === "round_trip" ? returnTo : null, stay_min_nights: trip === "round_trip" ? stayMin : null, stay_max_nights: trip === "round_trip" ? stayMax : null, cabins, cabin: cabins[0], budget_pln: budget, max_duration_h: maxDuration, max_stops: maxStops, preferred_airlines: preferredAirlines, direct_only: $("monitorDirectOnly").checked, excluded_airlines: excludedAirlines };
     const r = { min_stars: telegramStars, drop_percent: telegramDrop, immediate_new_low: $("telegramImmediate").checked };
-    const payload = { name, filters: f, app_rules: { min_stars: 1 }, telegram_rules: r, expires_at: f.to || null };
+    const payload = { name, filters: f, app_rules: { min_stars: 1 }, telegram_rules: r, expires_at: (f.return_to || f.to) || null };
     let result;
     try {
       const refreshed = { ...payload, last_scanned_at: null, next_scan_at: new Date().toISOString() };
@@ -207,7 +249,7 @@
       let offerRows = [];
       if (offerIds.length) {
         const { data, error } = await client.from("flight_offers")
-          .select("id,route,origin,destination,travel_date,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags")
+          .select("id,route,origin,destination,travel_date,return_date,trip_type,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags")
           .in("id", offerIds);
         if (error) throw error;
         offerRows = data || [];
@@ -219,7 +261,7 @@
       offersHaveMore = matchRows.length === OFFER_PAGE_SIZE;
       show("loadMoreOffersButton", offersHaveMore);
       renderOffers();
-      const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: co 3 godziny</span>`;
+      const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: 4 razy na dobę</span>`;
     } finally {
       offersLoading = false;
       button.disabled = false;
@@ -249,7 +291,7 @@
     $("offerList").innerHTML = filtered.length ? filtered.map(renderOffer).join("") : `<div class="empty">${offers.length ? "Brak ofert mieszczących się w budżecie i pozostałych filtrach." : "Brak dopasowanych ofert. Skaner uzupełni je po uruchomieniu własnego monitoringu."}</div>`;
     document.querySelectorAll("[data-feedback]").forEach(btn => btn.onclick = () => sendFeedback(btn.dataset.feedback, btn.dataset.match));
   }
-  function renderOffer(m) { const o = offerData(m); const mins = Number(o.duration_minutes || 0); const duration = mins ? `${Math.floor(mins / 60)}h ${mins % 60}m` : "—"; const tags = (o.tags || []).map(tag => `<span class="tag">${esc(tag)}</span>`).join(""); const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : ""; return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dateFmt(o.travel_date)}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${duration} · ${o.stops === 0 ? "bez przesiadek" : `${o.stops ?? "?"} przes.`}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`; }
+  function renderOffer(m) { const o = offerData(m); const mins = Number(o.duration_minutes || 0); const duration = mins ? `${Math.floor(mins / 60)}h ${mins % 60}m` : "—"; const tags = (o.tags || []).map(tag => `<span class="tag">${esc(tag)}</span>`).join(""); const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : ""; const dates = o.return_date ? `${dateFmt(o.travel_date)} → ${dateFmt(o.return_date)}` : dateFmt(o.travel_date); return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dates}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${duration} · ${o.stops === 0 ? "bez przesiadek" : `${o.stops ?? "?"} przes.`}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`; }
   async function sendFeedback(verdict, matchId) { const { error } = await client.from("feedback").upsert({ user_id: user.id, match_id: matchId, verdict }, { onConflict: "user_id,match_id" }); if (error) { alert(error.message); return; } const updated = await client.from("user_matches").update({ feedback: verdict }).eq("id", matchId).eq("user_id", user.id); if (updated.error) { alert(updated.error.message); return; } const label = { buy: "Kupiłbym", expensive: "Za drogo", skip: "Pominięto" }[verdict] || verdict; alert(`Zapisano: ${label}`); }
   async function signInWithTelegram() {
     const button = $("telegramLoginButton");

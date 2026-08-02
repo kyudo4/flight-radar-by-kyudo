@@ -43,6 +43,44 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual({item["cabin"] for item in items}, {"business", "first"})
         self.assertEqual(len(items), 2)
 
+    def test_round_trip_monitor_materializes_only_valid_stay_pairs(self):
+        monitor = {
+            "id": "monitor-round-trip",
+            "filters": {
+                "origins": ["POZ"], "destinations": ["BKK"],
+                "from": "2026-09-01", "to": "2026-09-02",
+                "return_from": "2026-09-03", "return_to": "2026-09-04",
+                "stay_min_nights": 2, "stay_max_nights": 3,
+                "trip_type": "round_trip", "cabins": ["BUSINESS"],
+            },
+        }
+        items = scanner.monitor_combinations(monitor)
+        self.assertEqual(len(items), 3)
+        self.assertTrue(all(item["trip_type"] == "round_trip" for item in items))
+        self.assertEqual({item["return_date"] for item in items}, {"2026-09-03", "2026-09-04"})
+
+    def test_round_trip_google_filter_has_two_legs(self):
+        fake_filter = type("FakeFilter", (), {"as_b64": lambda self: b"round-trip-filter"})()
+        with patch.object(gflights, "create_filter", return_value=fake_filter) as create:
+            url = gflights.build_url("POZ", "BKK", "2026-09-01", return_date="2026-09-14")
+        self.assertIn("round-trip-filter", url)
+        kwargs = create.call_args.kwargs
+        self.assertEqual(kwargs["trip"], "round-trip")
+        self.assertEqual(len(kwargs["flight_data"]), 2)
+        self.assertEqual(kwargs["flight_data"][1].date, "2026-09-14")
+
+    def test_query_ramp_drops_after_google_block_and_grows_after_healthy_runs(self):
+        with patch.object(scanner, "api", return_value=[{"status": "blocked", "blocked": True, "standard_limit": 320, "first_limit": 18}]):
+            reduced = scanner.adaptive_query_limits()
+        self.assertEqual(reduced, {"standard": 160, "first": 9})
+        with patch.object(scanner, "api", return_value=[
+            {"status": "ok", "blocked": False, "standard_limit": 240, "first_limit": 12},
+            {"status": "ok", "blocked": False, "standard_limit": 200, "first_limit": 10},
+            {"status": "partial", "blocked": False, "standard_limit": 160, "first_limit": 8},
+        ]):
+            increased = scanner.adaptive_query_limits()
+        self.assertEqual(increased, {"standard": 280, "first": 14})
+
     def test_monitor_rejects_more_than_five_airports_per_side(self):
         monitor = {
             "id": "monitor-too-wide",
