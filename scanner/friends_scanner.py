@@ -38,6 +38,7 @@ PROCESS_TELEGRAM_ONLY = os.environ.get("PROCESS_TELEGRAM_ONLY", "false").lower()
 RESERVED_RUN_ID = os.environ.get("RESERVED_RUN_ID", "").strip()
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))
 FETCH_RETRIES = 2
+PREFERENCE_FETCH_RETRIES = 3
 STALE_AFTER_HOURS = 24
 PRICE_HISTORY_LAST = {}
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
@@ -192,6 +193,10 @@ class ScanBlockedRun(RuntimeError):
     """Służy do oznaczenia blokady Google jako failed w GitHub Actions."""
 
 
+class ScanSourceRun(RuntimeError):
+    """Oznacza zmianę/awarię formatu źródła, a nie blokadę ruchu."""
+
+
 def force_due_scan_items(monitors, now):
     """Ręczny workflow omija oczekiwanie na kolejny zaplanowany cykl."""
     monitor_ids = [monitor["id"] for monitor in monitors if monitor.get("id")]
@@ -237,7 +242,7 @@ def fetch_all_rows(path, params, page_size=1000):
 def adaptive_query_limits():
     """Dobiera limit na ten przebieg i reaguje na opór Google.
 
-    Zdrowe przebiegi zwiększają limit małymi krokami. Pierwszy 403/429/503
+    Zdrowe przebiegi zwiększają limit małymi krokami. Pierwszy 409/403/429/503
     albo consent/CAPTCHA zapisuje przebieg jako zablokowany, a następny start
     schodzi co najmniej do bezpiecznego poziomu. Dzięki temu limit nie jest
     bezmyślnie podbijany po blokadzie i nie ma ponawiania zablokowanego żądania.
@@ -491,16 +496,23 @@ def fetch_existing(monitor_id):
 
 
 def fetch_preferences(user_id):
-    """Return durable feedback signals, or None for a pre-migration database."""
-    try:
-        return fetch_all_rows("user_preference_signals", {
-            "user_id": "eq." + user_id,
-            "select": "dimension,value,cabin,score",
-            "order": "updated_at.desc,dimension.asc,value.asc",
-        })
-    except Exception as exc:
-        log("Nie udało się odczytać trwałych preferencji: %s" % str(exc)[:120])
-        return None
+    """Read durable preferences or fail closed before rating/sending offers."""
+    last_error = None
+    for attempt in range(PREFERENCE_FETCH_RETRIES):
+        try:
+            return fetch_all_rows("user_preference_signals", {
+                "user_id": "eq." + user_id,
+                "select": "dimension,value,cabin,score",
+                "order": "updated_at.desc,dimension.asc,value.asc",
+            })
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < PREFERENCE_FETCH_RETRIES:
+                time.sleep(2 ** attempt)
+    raise RuntimeError(
+        "Nie udało się bezpiecznie odczytać preferencji użytkownika %s: %s"
+        % (user_id, str(last_error)[:160])
+    ) from last_error
 
 
 def save_offer(task, flight):
@@ -773,9 +785,15 @@ def main():
     blocked = False
     executed_count = 0
     source_errors_in_row = 0
+    source_degraded = False
     history_cache = {}
     preference_cache = {}
     try:
+        # Preferencje są częścią reguł alertu. Jeżeli baza nie pozwala ich
+        # odczytać, kończymy przed pierwszym zapytaniem Google zamiast oceniać
+        # i wysyłać oferty z pominięciem wyuczonych decyzji użytkownika.
+        for user_id in sorted({monitor["user_id"] for monitor in active}):
+            preference_cache[user_id] = fetch_preferences(user_id)
         for task in tasks:
             executed_count += 1
             task_failed = False
@@ -808,8 +826,6 @@ def main():
                             if monitor["id"] not in history_cache:
                                 history_cache[monitor["id"]] = fetch_existing(monitor["id"])
                             user_id = monitor["user_id"]
-                            if user_id not in preference_cache:
-                                preference_cache[user_id] = fetch_preferences(user_id)
                             added, sent = process_candidate(
                                 monitor, task, flight, history_cache[monitor["id"]],
                                 preference_cache[user_id],
@@ -829,7 +845,7 @@ def main():
                 api("PATCH", "monitor_scan_items", body={"next_scan_at": retry_at.isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
                 if source_errors_in_row >= 3:
                     task_errors.append("Google: obwód ochronny po trzech kolejnych błędach źródła")
-                    blocked = True
+                    source_degraded = True
                     break
             else:
                 api("PATCH", "monitor_scan_items", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
@@ -844,8 +860,6 @@ def main():
                 if monitor["id"] not in history_cache:
                     history_cache[monitor["id"]] = fetch_existing(monitor["id"])
                 user_id = monitor["user_id"]
-                if user_id not in preference_cache:
-                    preference_cache[user_id] = fetch_preferences(user_id)
                 added, sent = process_candidate(
                     monitor, task, flight, history_cache[monitor["id"]],
                     preference_cache[user_id],
@@ -854,12 +868,16 @@ def main():
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
-        final_status = "blocked" if blocked else ("partial" if task_errors else "ok")
+        final_status = "blocked" if blocked else ("error" if source_degraded else ("partial" if task_errors else "ok"))
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": final_status, "blocked": blocked, "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
         log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
         if blocked:
             raise ScanBlockedRun("Google zablokował skan; kolejny przebieg pozostaje na bezpiecznym limicie")
+        if source_degraded:
+            raise ScanSourceRun("Google zmienił lub zwrócił uszkodzoną strukturę danych; skan został bezpiecznie zatrzymany")
     except ScanBlockedRun:
+        raise
+    except ScanSourceRun:
         raise
     except Exception as exc:
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": "error", "error": str(exc)[:500]}, params={"id": "eq." + run["id"]})

@@ -101,9 +101,9 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
             body = resp.read().decode("utf-8", "ignore")
             status = resp.status
     except urllib.error.HTTPError as exc:
-        # 403/429/503 są traktowane jako blokada lub throttling Google.
+        # 409/403/429/503 są traktowane jako blokada lub throttling Google.
         # Nie ponawiamy ich w tym samym przebiegu, żeby nie pogłębiać blokady.
-        if exc.code in {403, 429, 503}:
+        if exc.code in {409, 403, 429, 503}:
             raise BlockedError("Google HTTP %s" % exc.code) from exc
         raise
     # Nie szukamy markerów blokady w surowym JS: normalna strona Google ma

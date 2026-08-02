@@ -75,6 +75,7 @@ create table public.telegram_auth_attempts (
 
 \ir ../supabase/migrations/20260802000500_round_trip_retention_telegram.sql
 \ir ../supabase/migrations/20260802000600_durable_preferences.sql
+\ir ../supabase/migrations/20260802000700_preference_integrity.sql
 
 insert into public.profiles(id) values ('00000000-0000-0000-0000-000000000001');
 insert into public.monitors(id, user_id, filters) values (
@@ -106,6 +107,13 @@ do $$ begin
   end if;
 end $$;
 
+-- Simulate six older negative reactions whose detailed rows were already
+-- cleaned. Replacing the seventh reaction with "buy" must leave -17, not -16.
+update public.user_preference_signals
+set positive_count = 0, negative_count = 7, score = -20
+where user_id = '00000000-0000-0000-0000-000000000001'
+  and dimension = 'airline' and value = 'CA' and cabin = 'ECONOMY';
+
 update public.feedback set verdict = 'buy'
 where user_id = '00000000-0000-0000-0000-000000000001'
   and match_id = '30000000-0000-0000-0000-000000000002';
@@ -113,8 +121,8 @@ where user_id = '00000000-0000-0000-0000-000000000001'
 do $$ begin
   if (select score from public.user_preference_signals
       where user_id = '00000000-0000-0000-0000-000000000001'
-        and dimension = 'airline' and value = 'CA' and cabin = 'ECONOMY') <> 1 then
-    raise exception 'verdict replacement was double-counted';
+        and dimension = 'airline' and value = 'CA' and cabin = 'ECONOMY') <> -17 then
+    raise exception 'verdict replacement drifted after score saturation';
   end if;
 end $$;
 
@@ -139,7 +147,7 @@ do $$ begin
   end if;
   if not exists (select 1 from public.user_preference_signals
                  where user_id = '00000000-0000-0000-0000-000000000001'
-                   and dimension = 'airline' and value = 'CA' and score = 1) then
+                   and dimension = 'airline' and value = 'CA' and score = -17) then
     raise exception 'learning was lost during retention cleanup';
   end if;
 end $$;
@@ -150,7 +158,7 @@ delete from public.monitors where id = '10000000-0000-0000-0000-000000000001';
 do $$ begin
   if not exists (select 1 from public.user_preference_signals
                  where user_id = '00000000-0000-0000-0000-000000000001'
-                   and dimension = 'airline' and value = 'CA' and score = 1) then
+                   and dimension = 'airline' and value = 'CA' and score = -17) then
     raise exception 'learned preference was lost with the monitor';
   end if;
 end $$;

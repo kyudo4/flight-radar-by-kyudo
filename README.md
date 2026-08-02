@@ -28,7 +28,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
    oraz najnowsze migracje `20260802000300_quality_history_mutes.sql` i
    `20260802000400_reliability_retention.sql` i
    `20260802000500_round_trip_retention_telegram.sql` oraz
-   `20260802000600_durable_preferences.sql`.
+   `20260802000600_durable_preferences.sql` i
+   `20260802000700_preference_integrity.sql`.
 2. W BotFather > Bot Settings > Web Login dodaj domenę panelu jako Allowed Origin
    i pozostaw Client ID/Secret dla tego samego bota.
 3. W Supabase Edge Functions utwórz funkcję `telegram-auth` z pliku
@@ -132,6 +133,11 @@ Opóźnienie między zapytaniami pozostaje włączone. Wartości można zmienić
 `MAX_STANDARD_QUERIES`, `MAX_FIRST_QUERIES`, `MAX_STANDARD_CEILING`,
 `MAX_FIRST_CEILING`, `QUERY_RAMP_STANDARD_STEP`, `QUERY_RAMP_FIRST_STEP` oraz
 `GOOGLE_REQUEST_DELAY_SECONDS`.
+
+Odpowiedź Google `409` jest traktowana jak blokada już przy pierwszym żądaniu.
+Trzy kolejne błędy struktury danych zatrzymują kolektor z osobnym statusem `error`,
+żeby nie mylić zmiany formatu źródła z CAPTCHA lub ograniczeniem ruchu. Skaner nie
+ocenia ani nie wysyła ofert, jeżeli nie może odczytać profilu preferencji użytkownika.
 
 ## Testy lokalne
 

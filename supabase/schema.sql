@@ -479,6 +479,17 @@ returns integer language sql immutable parallel safe as $$
   end;
 $$;
 
+create or replace function public.preference_signal_score(
+  dimension_value text, positive_value integer, negative_value integer
+)
+returns integer language sql immutable parallel safe as $$
+  select greatest(-20, least(20,
+    greatest(0, coalesce(positive_value, 0)) -
+    greatest(0, coalesce(negative_value, 0)) *
+      case when dimension_value in ('airline', 'duration', 'price') then 3 else 2 end
+  ))::integer;
+$$;
+
 create or replace function public.capture_feedback_preference()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare
@@ -546,11 +557,17 @@ begin
         user_id, dimension, value, cabin, score, positive_count, negative_count, updated_at
       ) values (
         new.user_id, signal_row.dimension, signal_row.value, context_row.cabin,
-        greatest(-20, least(20, score_delta)),
+        public.preference_signal_score(
+          signal_row.dimension, greatest(0, positive_delta), greatest(0, negative_delta)
+        ),
         greatest(0, positive_delta), greatest(0, negative_delta), now()
       )
       on conflict (user_id, dimension, value, cabin) do update set
-        score = greatest(-20, least(20, public.user_preference_signals.score + score_delta)),
+        score = public.preference_signal_score(
+          signal_row.dimension,
+          greatest(0, public.user_preference_signals.positive_count + positive_delta),
+          greatest(0, public.user_preference_signals.negative_count + negative_delta)
+        ),
         positive_count = greatest(0, public.user_preference_signals.positive_count + positive_delta),
         negative_count = greatest(0, public.user_preference_signals.negative_count + negative_delta),
         updated_at = now();
@@ -565,6 +582,7 @@ grant execute on function public.reserve_scan_slot() to service_role;
 revoke all on function public.cleanup_retention() from public, anon, authenticated;
 grant execute on function public.cleanup_retention() to service_role;
 revoke all on function public.preference_verdict_delta(text, text) from public, anon, authenticated;
+revoke all on function public.preference_signal_score(text, integer, integer) from public, anon, authenticated;
 revoke all on function public.capture_feedback_preference() from public, anon, authenticated;
 
 drop trigger if exists validate_monitor_filters on public.monitors;

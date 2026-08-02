@@ -510,11 +510,29 @@ class FlightRadarRegressionTests(unittest.TestCase):
             with self.assertRaises(scanner.gflights.BlockedError): scanner.fetch_task(task)
             self.assertEqual(fetch.call_count, 1)
 
+    def test_preference_read_retries_and_fails_closed(self):
+        with patch.object(scanner, "fetch_all_rows", side_effect=[OSError("temporary"), OSError("temporary"), [{"score": 1}]]) as fetch, \
+             patch.object(scanner.time, "sleep") as sleep:
+            self.assertEqual(scanner.fetch_preferences("user-1"), [{"score": 1}])
+            self.assertEqual(fetch.call_count, 3)
+            self.assertEqual(sleep.call_count, 2)
+        with patch.object(scanner, "fetch_all_rows", side_effect=OSError("database unavailable")) as fetch, \
+             patch.object(scanner.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "bezpiecznie odczytać preferencji"):
+                scanner.fetch_preferences("user-2")
+            self.assertEqual(fetch.call_count, scanner.PREFERENCE_FETCH_RETRIES)
+
     def test_google_http_throttling_is_classified_as_block(self):
         error = urllib.error.HTTPError("https://google.test", 429, "too many requests", {}, None)
         with patch.object(gflights.urllib.request, "urlopen", side_effect=error):
             with self.assertRaises(gflights.BlockedError):
                 gflights.fetch_gf("POZ", "BKK", "2026-09-02")
+
+    def test_google_http_conflict_is_classified_as_block(self):
+        error = urllib.error.HTTPError("https://google.test", 409, "conflict", {}, None)
+        with patch.object(gflights.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaises(gflights.BlockedError):
+                gflights.fetch_gf("GDN", "KIX", "2026-10-21")
 
     def test_google_captcha_body_is_classified_as_block(self):
         response = type("CaptchaResponse", (), {"status": 200, "read": lambda self: b"<html>unusual traffic - captcha</html>"})()
@@ -781,13 +799,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("python scanner/cleanup.py", workflow)
         self.assertIn("rpc/cleanup_retention", cleanup)
 
-    def test_retention_removes_past_unrated_matches_but_preserves_feedback(self):
-        migration = (ROOT / "supabase" / "migrations" / "20260802000500_round_trip_retention_telegram.sql").read_text()
-        self.assertIn("delete from public.user_matches", migration)
-        self.assertIn("offer.travel_date < current_date - 7", migration)
-        self.assertIn("match.feedback is null", migration)
-        self.assertIn("saved_feedback.match_id = match.id", migration)
-        self.assertIn("'matches_deleted', matches_deleted", migration)
+    def test_latest_retention_removes_old_details_after_durable_aggregation(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260802000600_durable_preferences.sql").read_text()
+        cleanup = migration.split("-- Detailed past results are disposable", 1)[1]
+        self.assertIn("delete from public.user_matches", cleanup)
+        self.assertIn("offer.travel_date < current_date - 7", cleanup)
+        self.assertNotIn("match.feedback is null", cleanup)
+        self.assertNotIn("saved_feedback.match_id = match.id", cleanup)
+        self.assertIn("'matches_deleted', matches_deleted", cleanup)
 
     def test_feedback_is_aggregated_into_a_durable_cross_monitor_profile(self):
         migration = (ROOT / "supabase" / "migrations" / "20260802000600_durable_preferences.sql").read_text()
@@ -798,7 +817,21 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("preference_signals_owner_read", migration)
         self.assertIn("Detailed past results are disposable", migration)
         self.assertIn("offer.travel_date < current_date - 7", migration)
+        self.assertIn("on conflict (user_id, dimension, value, cabin) do nothing", migration)
         self.assertIn('fetch_all_rows("user_preference_signals"', scanner_source)
+
+    def test_preference_integrity_migration_repairs_saturated_scores(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260802000700_preference_integrity.sql").read_text()
+        self.assertIn("preference_signal_score", migration)
+        self.assertIn("positive_count + positive_delta", migration)
+        self.assertIn("negative_count + negative_delta", migration)
+        self.assertIn("where score is distinct from public.preference_signal_score", migration)
+
+    def test_source_structure_errors_are_not_reported_as_google_blocks(self):
+        source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn("source_degraded = True", source)
+        self.assertIn('"error" if source_degraded', source)
+        self.assertIn("raise ScanSourceRun", source)
 
     def test_frontend_and_scanner_have_legacy_database_fallbacks(self):
         app = (ROOT / "site" / "app.js").read_text()
