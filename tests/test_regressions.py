@@ -170,6 +170,60 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(page.gotos, 2)
         self.assertEqual(cards[0]["price_pln"], 4500)
 
+    def test_rendered_fallback_waits_for_cards_after_heading(self):
+        label = (
+            "From 2,894 Polish zlotys. 2 stops flight with Qatar Airways. "
+            "Leaves Gdansk Airport at 10:00 AM and arrives at Osaka Airport at "
+            "4:00 PM. Total duration 22 hr 10 min. Select flight"
+        )
+
+        class DelayedCards:
+            def __init__(self): self.polls = 0; self.first = self
+            def count(self): return 1 if self.polls >= 2 else 0
+            def nth(self, _): return self
+            def get_attribute(self, _): return label
+            def wait_for(self, timeout=None): return None
+
+        class FakePage:
+            def __init__(self): self.cards = DelayedCards()
+            def goto(self, *args, **kwargs): pass
+            def get_by_role(self, role, **kwargs):
+                if role == "heading":
+                    return type("Heading", (), {"wait_for": lambda self, timeout=None: None})()
+                return self.cards
+            def locator(self, selector):
+                if selector == "body":
+                    return type("Body", (), {"inner_text": lambda self, timeout=None: "Search results"})()
+                return self.cards
+            def wait_for_timeout(self, _): self.cards.polls += 1
+
+        cards = google_browser._load_cards(FakePage(), "https://google.test")
+        self.assertEqual(cards[0]["price_pln"], 2894)
+
+    def test_explicit_no_flights_is_not_a_source_failure(self):
+        class NoFlightPage:
+            def goto(self, *args, **kwargs): pass
+            def get_by_role(self, role, **kwargs):
+                if role == "heading":
+                    return type("Heading", (), {"wait_for": lambda self, timeout=None: None})()
+                return type("Empty", (), {"count": lambda self: 0})()
+            def locator(self, selector):
+                if selector == "body":
+                    return type("Body", (), {"inner_text": lambda self, timeout=None: "No flights found"})()
+                return type("Empty", (), {"count": lambda self: 0})()
+            def wait_for_timeout(self, _): pass
+
+        with patch.object(gflights.google_browser, "_page", return_value=NoFlightPage()):
+            with self.assertRaises(google_browser.BrowserNoFlightsError):
+                google_browser._load_cards(NoFlightPage(), "https://google.test")
+
+    def test_no_flights_fallback_is_returned_as_an_empty_result(self):
+        with patch.object(gflights, "_fetch_server", side_effect=gflights.SourceParseError("payload moved")), \
+             patch.object(gflights.google_browser, "fetch_rendered", side_effect=google_browser.BrowserNoFlightsError("empty")):
+            level, flights = gflights.fetch_gf("GDN", "KIX", "2026-10-29")
+        self.assertIsNone(level)
+        self.assertEqual(flights, [])
+
     def test_google_uses_rendered_fallback_when_server_payload_moves(self):
         rendered = [{
             "airline_name": "Qatar Airways", "price_pln": 4300,

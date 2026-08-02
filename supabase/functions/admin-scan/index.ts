@@ -26,7 +26,10 @@ Deno.serve(async (request) => {
     const githubToken = Deno.env.get('GITHUB_ACTIONS_TOKEN');
     const repository = Deno.env.get('GITHUB_REPOSITORY') || 'kyudo4/flight-radar-by-kyudo';
     const workflow = Deno.env.get('GITHUB_WORKFLOW_ID') || 'scan.yml';
-    if (!accessToken || !supabaseUrl || !serviceRoleKey || !githubToken) {
+    if (!accessToken) {
+      return json({ error: 'Wymagana jest aktywna sesja administratora.' }, corsHeaders, 401);
+    }
+    if (!supabaseUrl || !serviceRoleKey || !githubToken) {
       return json({ error: 'Brak konfiguracji ręcznego skanu.' }, corsHeaders, 500);
     }
 

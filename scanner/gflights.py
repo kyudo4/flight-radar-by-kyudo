@@ -121,8 +121,8 @@ def _fetch_server(origin, dest, date, seat="business", return_date=None, timeout
         raise BlockedError("Google consent/CAPTCHA wall / status %s" % status)
     try:
         parsed = google_parser.parse(body, origin=origin, destination=dest, return_date=return_date)
-    except google_parser.GoogleNoFlights as exc:
-        raise SourceParseError(str(exc)) from exc
+    except google_parser.GoogleNoFlights:
+        return None, []
     except google_parser.GoogleParseError as exc:
         # Nie oznaczamy zmienionego HTML jako "brak lotów". Taki przebieg musi
         # trafić do statusu partial i zatrzymać automatyczne zwiększanie limitu.
@@ -172,6 +172,8 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
             raise SourceCapacityError(str(exc)) from exc
         except google_browser.BrowserBlockedError as exc:
             raise BlockedError(str(exc)) from exc
+        except google_browser.BrowserNoFlightsError:
+            return None, []
         except google_browser.BrowserParseError as exc:
             raise SourceParseError(
                 "%s; odczyt renderowany: %s" % (str(lightweight_error), str(exc))

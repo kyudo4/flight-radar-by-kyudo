@@ -48,7 +48,7 @@ jobs:
           MAX_STANDARD_CEILING: "400"
           MAX_FIRST_CEILING: "40"
           GOOGLE_REQUEST_DELAY_SECONDS: "1.5"
-          GOOGLE_BROWSER_QUERY_LIMIT: "80"
+          GOOGLE_BROWSER_QUERY_LIMIT: ${{ inputs.full_queue_scan == true && '400' || '80' }}
           FULL_QUEUE_SCAN: ${{ inputs.full_queue_scan == true && 'true' || 'false' }}
           FULL_QUEUE_STANDARD_LIMIT: "400"
           FULL_QUEUE_FIRST_LIMIT: "40"

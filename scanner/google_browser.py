@@ -9,6 +9,7 @@ when that response cannot be parsed.
 import atexit
 import os
 import re
+import time
 
 
 class BrowserBlockedError(RuntimeError):
@@ -21,6 +22,10 @@ class BrowserCapacityError(RuntimeError):
 
 class BrowserParseError(RuntimeError):
     """Chrome loaded the page but no trustworthy flight cards were found."""
+
+
+class BrowserNoFlightsError(RuntimeError):
+    """Google explicitly rendered a valid page without any flights."""
 
 
 _RUNTIME = None
@@ -133,6 +138,48 @@ def _card_labels(page):
     return labels
 
 
+def _visible_body_text(page):
+    """Return visible text used to distinguish no-results from a slow render."""
+    try:
+        return " ".join(page.locator("body").inner_text(timeout=3000).split()).lower()
+    except Exception:
+        return ""
+
+
+def _wait_for_cards(page, timeout_ms=25000):
+    """Wait for cards instead of sampling the DOM immediately after the heading.
+
+    Google renders the result heading before the flight cards, especially on a
+    cold GitHub runner. A single ``locator.count()`` at that point used to
+    turn a slow but valid result into a source failure.
+    """
+    deadline = time.monotonic() + timeout_ms / 1000
+    no_flight_markers = (
+        "no flights", "no available flights", "no matching flights",
+        "couldn't find any flights", "could not find any flights",
+    )
+    while time.monotonic() < deadline:
+        labels = _card_labels(page)
+        if labels:
+            return labels
+        body = _visible_body_text(page)
+        if any(marker in body for marker in no_flight_markers):
+            raise BrowserNoFlightsError("Google nie znalazł lotów")
+        page.wait_for_timeout(500)
+    return []
+
+
+def _consume_query_slot():
+    """Count every rendered page load, including round-trip sub-pages."""
+    global _QUERY_COUNT
+    maximum = max(1, min(500, int(os.environ.get("GOOGLE_BROWSER_QUERY_LIMIT", "80"))))
+    if _QUERY_COUNT >= maximum:
+        raise BrowserCapacityError(
+            "Awaryjny odczyt Chrome osiągnął bezpieczny limit %d zapytań" % maximum
+        )
+    _QUERY_COUNT += 1
+
+
 def _click_card(page, label):
     """Open a selected outbound card regardless of its current ARIA role."""
     escaped = str(label).replace("\\", "\\\\").replace('"', '\\"')
@@ -210,6 +257,7 @@ def _load_cards(page, url, returning=False):
     last_error = None
     for attempt in range(2):
         try:
+            _consume_query_slot()
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
             heading = "Returning flights" if returning else "Search results"
             try:
@@ -218,7 +266,8 @@ def _load_cards(page, url, returning=False):
                 pass
             cards = []
             seen = set()
-            for label in _card_labels(page):
+            labels = _wait_for_cards(page)
+            for label in labels:
                 if not label or label in seen:
                     continue
                 seen.add(label)
@@ -231,7 +280,7 @@ def _load_cards(page, url, returning=False):
             last_error = BrowserParseError(
                 "Google zwrócił karty bez pełnej ceny/czasu/przesiadek"
             )
-        except BrowserBlockedError:
+        except (BrowserBlockedError, BrowserNoFlightsError):
             raise
         except Exception as exc:
             last_error = exc
@@ -276,13 +325,6 @@ def _outbound_candidates(cards, maximum=3):
 
 def fetch_rendered(url, return_date=None):
     """Return normalized one-way or fully verified round-trip cards."""
-    global _QUERY_COUNT
-    maximum = max(1, min(200, int(os.environ.get("GOOGLE_BROWSER_QUERY_LIMIT", "80"))))
-    if _QUERY_COUNT >= maximum:
-        raise BrowserCapacityError(
-            "Awaryjny odczyt Chrome osiągnął bezpieczny limit %d zapytań" % maximum
-        )
-    _QUERY_COUNT += 1
     page = _page()
     outbound_cards = _load_cards(page, url)
     if not return_date:
@@ -300,6 +342,7 @@ def fetch_rendered(url, return_date=None):
         return outbound_cards
 
     combined = []
+    no_return_flights = False
     for candidate_index, outbound in enumerate(_outbound_candidates(outbound_cards)):
         # Two complementary outbound choices provide airline variety.  A
         # third is attempted only when both produced no valid return.
@@ -316,6 +359,9 @@ def fetch_rendered(url, return_date=None):
             inbound_cards = _load_cards(page, return_url, returning=True)
         except BrowserBlockedError:
             raise
+        except BrowserNoFlightsError:
+            no_return_flights = True
+            continue
         except Exception:
             continue
         inbound_cards.sort(key=lambda item: (
@@ -342,5 +388,7 @@ def fetch_rendered(url, return_date=None):
                 "link": return_url,
             })
     if not combined:
+        if no_return_flights:
+            raise BrowserNoFlightsError("Google nie znalazł potwierdzonego lotu powrotnego")
         raise BrowserParseError("Nie udało się potwierdzić odcinka powrotnego w Google")
     return combined
