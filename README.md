@@ -26,7 +26,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
    na wcześniejszej wersji, wykonaj dodatkowo migracje z katalogu `supabase/migrations/`
    w kolejności dat, w tym `20260728_offer_read_policy.sql`, `20260728_auth_hardening.sql`
    oraz najnowsze migracje `20260802000300_quality_history_mutes.sql` i
-   `20260802000400_reliability_retention.sql`.
+   `20260802000400_reliability_retention.sql` i
+   `20260802000500_round_trip_retention_telegram.sql`.
 2. W BotFather > Bot Settings > Web Login dodaj domenę panelu jako Allowed Origin
    i pozostaw Client ID/Secret dla tego samego bota.
 3. W Supabase Edge Functions utwórz funkcję `telegram-auth` z pliku
@@ -77,6 +78,8 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 - historia ceny zapisuje tylko zmiany, panel pobiera ograniczoną liczbę ostatnich punktów,
   a cotygodniowy workflow usuwa obserwacje starsze niż 30 dni i zostawia stan minimum
   ceny oraz ostatniego alertu potrzebny do blokowania duplikatów;
+- po upływie tygodnia od daty wylotu sprzątane są nieużywane dopasowania i oferty;
+  reakcje użytkownika pozostają zachowane jako dane uczące filtr;
 - preferowane linie są ustawiane osobno przez użytkownika i wpływają na ocenę,
   a wykluczone linie są odrzucane przed zapisem;
 - panel ma dodatkowe lokalne filtrowanie wyników po trasie/linii, klasie,

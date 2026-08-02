@@ -113,6 +113,32 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(flight["return_stops"], 0)
         self.assertEqual(flight["duration_h"], 8.5)
 
+    def test_round_trip_parser_splits_connecting_flights_at_return_origin(self):
+        def segment(origin, destination, travel_day, departure_hour, arrival_hour):
+            value = [None] * 22
+            value[2], value[3], value[6] = "Qatar", origin, destination
+            value[8], value[10] = [departure_hour], [arrival_hour]
+            value[17], value[20], value[21] = "A350", travel_day, travel_day
+            return value
+
+        segments = [
+            segment("WAW", "DOH", [2026, 9, 1], 8, 14),
+            segment("DOH", "NRT", [2026, 9, 1], 16, 23),
+            segment("NRT", "DOH", [2026, 9, 14], 10, 16),
+            segment("DOH", "WAW", [2026, 9, 14], 18, 23),
+        ]
+        payload = [None, None, None, [[[['business', ['Qatar Airways'], segments], [[0, 4500]]]]]]
+        html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+        flight = google_parser.parse(html, origin="WAW", destination="NRT", return_date="2026-09-14")[0]
+        self.assertTrue(flight["round_trip_verified"])
+        self.assertEqual(flight["outbound_duration_h"], 15)
+        self.assertEqual(flight["return_duration_h"], 13)
+        self.assertEqual(flight["outbound_stops"], 1)
+        self.assertEqual(flight["return_stops"], 1)
+        self.assertTrue(scanner.quality(flight, {
+            "trip_type": "round_trip", "max_duration_h": 22, "max_stops": 1,
+        }))
+
     def test_round_trip_quality_applies_time_and_stops_to_both_legs(self):
         flight = {
             "round_trip_verified": True,
@@ -593,6 +619,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertNotIn('group: friends-backend', workflow)
         self.assertIn("python scanner/telegram_feedback.py", workflow)
         self.assertIn("telegram_io.process_link_updates(api, telegram, TG_TOKEN)", scanner_source)
+        main_source = scanner_source.split("def main():", 1)[1]
+        self.assertNotIn("process_link_updates()", main_source)
 
     def test_telegram_auth_is_origin_limited_and_rate_limited(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
@@ -719,6 +747,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("cleanup_retention", migration)
         self.assertIn("python scanner/cleanup.py", workflow)
         self.assertIn("rpc/cleanup_retention", cleanup)
+
+    def test_retention_removes_past_unrated_matches_but_preserves_feedback(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260802000500_round_trip_retention_telegram.sql").read_text()
+        self.assertIn("delete from public.user_matches", migration)
+        self.assertIn("offer.travel_date < current_date - 7", migration)
+        self.assertIn("match.feedback is null", migration)
+        self.assertIn("saved_feedback.match_id = match.id", migration)
+        self.assertIn("'matches_deleted', matches_deleted", migration)
 
     def test_frontend_and_scanner_have_legacy_database_fallbacks(self):
         app = (ROOT / "site" / "app.js").read_text()

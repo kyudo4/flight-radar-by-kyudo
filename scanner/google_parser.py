@@ -75,13 +75,22 @@ def _split_round_trip(segments, origin, destination, return_date):
     expected_date = tuple(int(part) for part in str(return_date).split("-"))
     for index, segment in enumerate(segments):
         segment_origin = segment[3] if len(segment) > 3 else ""
-        segment_destination = segment[6] if len(segment) > 6 else ""
         segment_date = segment[20] if len(segment) > 20 else None
-        if (str(segment_origin).upper() == str(destination).upper()
-                and str(segment_destination).upper() == str(origin).upper()
-                and segment_date is not None
-                and _date(segment_date) == expected_date):
-            return segments[:index], segments[index:], True
+        if (index == 0
+                or str(segment_origin).upper() != str(destination).upper()
+                or segment_date is None
+                or _date(segment_date) != expected_date):
+            continue
+
+        outbound = segments[:index]
+        inbound = segments[index:]
+        outbound_origin = outbound[0][3] if len(outbound[0]) > 3 else ""
+        outbound_destination = outbound[-1][6] if len(outbound[-1]) > 6 else ""
+        inbound_destination = inbound[-1][6] if len(inbound[-1]) > 6 else ""
+        if (str(outbound_origin).upper() == str(origin).upper()
+                and str(outbound_destination).upper() == str(destination).upper()
+                and str(inbound_destination).upper() == str(origin).upper()):
+            return outbound, inbound, True
     return segments, [], False
 
 

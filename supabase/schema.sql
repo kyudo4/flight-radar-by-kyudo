@@ -170,6 +170,7 @@ create unique index monitor_scan_items_one_way_key on public.monitor_scan_items(
 create unique index monitor_scan_items_round_trip_key on public.monitor_scan_items(monitor_id, origin, destination, travel_date, return_date, cabin) where return_date is not null and trip_type = 'round_trip';
 create index offers_route_date_idx on public.flight_offers(origin, destination, travel_date, cabin);
 create index offers_round_trip_date_idx on public.flight_offers(origin, destination, travel_date, return_date, cabin);
+create index flight_offers_travel_date_idx on public.flight_offers(travel_date);
 create index offer_price_history_offer_idx on public.offer_price_history(offer_id, observed_at desc);
 create index offer_mutes_user_idx on public.offer_mutes(user_id, kind, value);
 create index matches_user_idx on public.user_matches(user_id, updated_at desc);
@@ -406,6 +407,7 @@ create or replace function public.cleanup_retention()
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   history_deleted bigint := 0;
+  matches_deleted bigint := 0;
   monitors_deleted bigint := 0;
   offers_deleted bigint := 0;
   runs_deleted bigint := 0;
@@ -422,10 +424,21 @@ begin
     where row_number > 20 or observed_at < now() - interval '30 days'
   );
   get diagnostics history_deleted = row_count;
+  delete from public.user_matches match
+  using public.flight_offers offer
+  where match.offer_id = offer.id
+    and offer.travel_date < current_date - 7
+    and match.feedback is null
+    and not exists (
+      select 1 from public.feedback saved_feedback
+      where saved_feedback.match_id = match.id
+    );
+  get diagnostics matches_deleted = row_count;
   delete from public.monitors where status = 'expired' and updated_at < now() - interval '30 days';
   get diagnostics monitors_deleted = row_count;
   delete from public.flight_offers offer
-  where offer.last_seen_at < now() - interval '45 days'
+  where (offer.last_seen_at < now() - interval '45 days'
+         or offer.travel_date < current_date - 7)
     and not exists (select 1 from public.user_matches match where match.offer_id = offer.id);
   get diagnostics offers_deleted = row_count;
   delete from public.scan_runs where started_at < now() - interval '30 days';
@@ -436,6 +449,7 @@ begin
   get diagnostics invites_deleted = row_count;
   return jsonb_build_object(
     'history_deleted', history_deleted,
+    'matches_deleted', matches_deleted,
     'monitors_deleted', monitors_deleted,
     'offers_deleted', offers_deleted,
     'runs_deleted', runs_deleted,

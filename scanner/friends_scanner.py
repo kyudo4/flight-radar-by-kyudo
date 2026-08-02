@@ -640,15 +640,10 @@ def process_candidate(monitor, task, flight, previous=None):
 def main():
     if not SUPABASE_URL or not SERVICE_KEY or not TG_TOKEN:
         raise SystemExit("Brak SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY albo TG_BOT_TOKEN")
-    try:
-        process_link_updates()
-    except Exception as exc:
-        # Awaria Telegrama nie może zatrzymać pobierania ofert z Google.
-        log("Pominięto synchronizację Telegrama po błędzie: %s" % str(exc)[:160])
-        if PROCESS_TELEGRAM_ONLY:
-            raise
     if PROCESS_TELEGRAM_ONLY:
-        log("Przetworzono kolejkę odpowiedzi Telegrama")
+        # Odpowiedzi Telegrama obsługuje wyłącznie dedykowany workflow.
+        # Ta gałąź chroni stare ręczne uruchomienia przed rozpoczęciem skanu.
+        log("Odbiór Telegrama jest obsługiwany przez telegram_feedback.py")
         return
     mark_stale_offers()
     now = datetime.utcnow()
