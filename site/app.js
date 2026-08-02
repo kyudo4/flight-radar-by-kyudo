@@ -286,11 +286,21 @@
       const offerIds = [...new Set(matchRows.map(match => match.offer_id).filter(Boolean))];
       let offerRows = [];
       if (offerIds.length) {
-        const { data, error } = await client.from("flight_offers")
+        const modern = await client.from("flight_offers")
           .select("id,fingerprint,route,origin,destination,travel_date,return_date,trip_type,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags,last_seen_at,verification_status,verification_note")
           .in("id", offerIds);
-        if (error) throw error;
-        offerRows = data || [];
+        if (modern.error && /verification_status|verification_note|column/i.test(modern.error.message || "")) {
+          // Compatibility with databases that have not run the additive
+          // quality migration yet.
+          const legacy = await client.from("flight_offers")
+            .select("id,fingerprint,route,origin,destination,travel_date,return_date,trip_type,airline,airline_name,price_pln,cabin,duration_minutes,stops,aircraft,link,source,tags,last_seen_at")
+            .in("id", offerIds);
+          if (legacy.error) throw legacy.error;
+          offerRows = legacy.data || [];
+        } else {
+          if (modern.error) throw modern.error;
+          offerRows = modern.data || [];
+        }
       }
       if (reset) {
         const { data: muteRows, error: muteError } = await client.from("offer_mutes").select("id,kind,value,label").eq("user_id", user.id).order("created_at", { ascending: false });

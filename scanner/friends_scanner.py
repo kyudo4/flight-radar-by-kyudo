@@ -464,7 +464,17 @@ def save_offer(task, flight):
     verification_status = "verified" if trip_type_value == "one_way" and flight.get("round_trip_verified", True) else "pending_return"
     verification_note = "" if verification_status == "verified" else "Google nie udostępnił jeszcze szczegółów odcinka powrotnego"
     payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "return_date": task.get("return_date"), "trip_type": trip_type_value, "cabin": task["cabin"].upper().replace("-", "_"), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": tags, "verification_status": verification_status, "verification_note": verification_note, "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
-    rows = api("POST", "flight_offers", body=payload, params={"on_conflict": "fingerprint"})
+    try:
+        rows = api("POST", "flight_offers", body=payload, params={"on_conflict": "fingerprint"})
+    except urllib.error.HTTPError as exc:
+        if exc.code != 400:
+            raise
+        # The quality columns are additive. Until Supabase applies the new
+        # migration, keep saving the core offer instead of stopping scans.
+        legacy_payload = dict(payload)
+        legacy_payload.pop("verification_status", None)
+        legacy_payload.pop("verification_note", None)
+        rows = api("POST", "flight_offers", body=legacy_payload, params={"on_conflict": "fingerprint"})
     offer = rows[0] if rows else api("GET", "flight_offers", params={"fingerprint": "eq." + payload["fingerprint"], "select": "*"})[0]
     try:
         if flight.get("price_pln"):

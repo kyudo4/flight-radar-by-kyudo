@@ -641,7 +641,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260802-8', html)
+        self.assertIn('app.js?v=20260802-9', html)
         self.assertIn('styles.css?v=20260802-5', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
@@ -668,6 +668,12 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("offer_price_history", migration)
         self.assertIn("offer_mutes", migration)
         self.assertIn("scanHistory", (ROOT / "site" / "index.html").read_text())
+
+    def test_frontend_and_scanner_have_legacy_database_fallbacks(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn("Compatibility with databases", app)
+        self.assertIn("legacy_payload.pop(\"verification_status\"", scanner_source)
 
     def test_telegram_bootstrap_password_fits_bcrypt_limit(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
