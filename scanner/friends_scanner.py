@@ -162,7 +162,7 @@ def sync_monitor_scan_items(monitor):
 
 
 def force_due_scan_items(monitors, now):
-    """Ręczny workflow omija oczekiwanie na poprzedni trzygodzinny cykl."""
+    """Ręczny workflow omija oczekiwanie na kolejny zaplanowany cykl."""
     monitor_ids = [monitor["id"] for monitor in monitors if monitor.get("id")]
     if not monitor_ids:
         return
