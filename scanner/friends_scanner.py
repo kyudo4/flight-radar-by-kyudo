@@ -40,7 +40,6 @@ FETCH_RETRIES = 2
 STALE_AFTER_HOURS = 24
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
 AIRPORTS_FILE = Path(__file__).resolve().parents[1] / "site" / "airports.json"
-MUTE_CACHE = {}
 
 
 def load_airport_codes():
@@ -274,34 +273,6 @@ def mark_stale_offers():
     except Exception as exc:
         # Stara baza bez migracji nie może zatrzymać skanera.
         log("Nie udało się oznaczyć starych ofert: %s" % str(exc)[:120])
-
-
-def fetch_user_mutes(user_id):
-    if user_id in MUTE_CACHE:
-        return MUTE_CACHE[user_id]
-    try:
-        rows = api("GET", "offer_mutes", params={"user_id": "eq." + user_id, "select": "kind,value"})
-    except Exception as exc:
-        log("Nie udało się odczytać wyciszeń użytkownika: %s" % str(exc)[:120])
-        rows = []
-    MUTE_CACHE[user_id] = rows
-    return rows
-
-
-def offer_is_muted(user_id, offer, offer_id):
-    route = str(offer.get("route") or "")
-    code = str(offer.get("airline") or "").strip().upper()
-    name = " ".join(str(offer.get("airline_name") or "").upper().split())
-    for mute in fetch_user_mutes(user_id):
-        value = str(mute.get("value") or "")
-        kind = mute.get("kind")
-        if kind == "offer" and value == str(offer_id):
-            return True
-        if kind == "route" and value == route:
-            return True
-        if kind == "airline" and value in {code, name}:
-            return True
-    return False
 
 
 def fetch_task(task):
@@ -588,8 +559,6 @@ def process_candidate(monitor, task, flight):
         # Nowy dzień tej samej trasy i linii nie jest nową okazją, jeśli kosztuje tyle samo lub więcej.
         return 0, 0
     offer = save_offer(task, flight)
-    if offer_is_muted(monitor["user_id"], {**flight, "route": route}, offer["id"]):
-        return 1, 0
     row = next((x for x in previous if x["offer_id"] == offer["id"]), None)
     current_price = flight.get("price_pln")
     previous_min = min(previous_prices) if previous_prices else None

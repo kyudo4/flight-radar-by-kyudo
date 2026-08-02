@@ -641,7 +641,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260802-9', html)
+        self.assertIn('app.js?v=20260802-10', html)
         self.assertIn('styles.css?v=20260802-5', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
@@ -661,12 +661,9 @@ class FlightRadarRegressionTests(unittest.TestCase):
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         migration = (ROOT / "supabase" / "migrations" / "20260802000300_quality_history_mutes.sql").read_text()
         self.assertIn("offer_price_history", app)
-        self.assertIn("offer_mutes", app)
         self.assertIn("offer_price_history", scanner_source)
         self.assertIn("mark_stale_offers", scanner_source)
-        self.assertIn("offer_mutes", scanner_source)
         self.assertIn("offer_price_history", migration)
-        self.assertIn("offer_mutes", migration)
         self.assertIn("scanHistory", (ROOT / "site" / "index.html").read_text())
 
     def test_frontend_and_scanner_have_legacy_database_fallbacks(self):

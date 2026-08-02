@@ -71,8 +71,6 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   użytkownika (domyślnie 10%);
 - cena jest zapisywana w historii, a oferta bez potwierdzenia przez 24 godziny
   dostaje status „Cena niepotwierdzona”; panel domyślnie pokazuje tylko ceny aktualne;
-- użytkownik może wyciszyć pojedynczą ofertę, linię albo trasę i w każdej chwili
-  cofnąć wyciszenie;
 - preferowane linie są ustawiane osobno przez użytkownika i wpływają na ocenę,
   a wykluczone linie są odrzucane przed zapisem;
 - panel ma dodatkowe lokalne filtrowanie wyników po trasie/linii, klasie,

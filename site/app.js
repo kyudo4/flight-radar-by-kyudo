@@ -4,7 +4,7 @@
   const esc = value => String(value ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[c]));
   const safeHref = value => /^https?:\/\//i.test(String(value || "")) ? esc(value) : "#";
   const configReady = cfg.supabaseUrl && cfg.supabaseAnonKey && !String(cfg.supabaseUrl).includes("YOUR_") && !String(cfg.supabaseAnonKey).includes("YOUR_");
-  let client = null, user = null, profile = null, monitors = [], offers = [], mutes = [], priceHistory = {};
+  let client = null, user = null, profile = null, monitors = [], offers = [], priceHistory = {};
   let editingMonitorId = null, airportDataReady = false, offerOffset = 0, offersHaveMore = false, offersLoading = false;
   const OFFER_PAGE_SIZE = 40;
   const MAX_MONITOR_COMBINATIONS = 5000;
@@ -302,11 +302,6 @@
           offerRows = modern.data || [];
         }
       }
-      if (reset) {
-        const { data: muteRows, error: muteError } = await client.from("offer_mutes").select("id,kind,value,label").eq("user_id", user.id).order("created_at", { ascending: false });
-        // The additive migration may still be waiting to be applied.
-        mutes = muteError ? [] : (muteRows || []);
-      }
       if (offerIds.length) {
         const { data: historyRows, error: historyError } = await client.from("offer_price_history").select("offer_id,price_pln,observed_at").in("offer_id", offerIds).order("observed_at", { ascending: true });
         if (!historyError) for (const row of historyRows || []) (priceHistory[row.offer_id] ||= []).push(row);
@@ -317,7 +312,6 @@
       offerOffset += matchRows.length;
       offersHaveMore = matchRows.length === OFFER_PAGE_SIZE;
       show("loadMoreOffersButton", offersHaveMore);
-      renderMutes();
       renderOffers();
       const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: 4 razy na dobę</span>`;
     } finally {
@@ -337,7 +331,6 @@
       const monitor = monitors.find(item => item.id === match.monitor_id);
       const budget = Number(monitor?.filters?.budget_pln);
       if (!monitor || !Number.isFinite(budget) || budget <= 0 || Number(offer.price_pln) > budget) return false;
-      if (isOfferMuted(offer)) return false;
       const stale = isOfferStale(offer);
       if (freshness === "fresh" && stale) return false;
       if (freshness === "stale" && !stale) return false;
@@ -353,10 +346,8 @@
     $("offerCount").textContent = offers.length ? `Pokazano ${filtered.length} z ${offers.length}` : "";
     $("offerList").innerHTML = filtered.length ? filtered.map(renderOffer).join("") : `<div class="empty">${offers.length ? "Brak ofert mieszczących się w budżecie i pozostałych filtrach." : "Brak dopasowanych ofert. Skaner uzupełni je po uruchomieniu własnego monitoringu."}</div>`;
     document.querySelectorAll("[data-feedback]").forEach(btn => btn.onclick = () => sendFeedback(btn.dataset.feedback, btn.dataset.match));
-    document.querySelectorAll("[data-mute-kind]").forEach(btn => btn.onclick = () => muteOffer(btn.dataset.match, btn.dataset.muteKind));
   }
   function isOfferStale(offer) { return offer.verification_status === "stale" || (offer.last_seen_at && Date.now() - new Date(offer.last_seen_at).getTime() > 24 * 3600000); }
-  function isOfferMuted(offer) { const route = String(offer.route || ""), code = String(offer.airline || "").toUpperCase(), name = String(offer.airline_name || "").toUpperCase().replace(/\s+/g, " "); return mutes.some(mute => (mute.kind === "offer" && mute.value === offer.id) || (mute.kind === "route" && mute.value === route) || (mute.kind === "airline" && [code, name].includes(mute.value))); }
   function renderPriceHistory(offer) {
     const rows = (priceHistory[offer.id] || []).filter(row => Number(row.price_pln) > 0).slice(-12);
     if (!rows.length) return "";
@@ -369,10 +360,7 @@
     const trend = prices[prices.length - 1] < prices[0] ? "↓ taniej" : prices[prices.length - 1] > prices[0] ? "↑ drożej" : "→ bez zmiany";
     return `<div class="price-history"><span>Historia ceny: ${min.toLocaleString("pl-PL")}–${max.toLocaleString("pl-PL")} PLN · ${trend}</span><span class="price-history-bars" aria-label="Historia ceny">${bars}</span></div>`;
   }
-  function renderOffer(m) { const o = offerData(m); const mins = Number(o.duration_minutes || 0); const duration = mins ? `${Math.floor(mins / 60)}h ${mins % 60}m` : "—"; const stale = isOfferStale(o); const tags = [...(o.tags || []), ...(stale ? ["Cena niepotwierdzona"] : []), ...(o.verification_status === "pending_return" ? ["Powrót do potwierdzenia"] : [])].filter((tag, index, all) => all.indexOf(tag) === index).map(tag => `<span class="tag">${esc(tag)}</span>`).join(""); const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : ""; const dates = o.return_date ? `${dateFmt(o.travel_date)} → ${dateFmt(o.return_date)}` : dateFmt(o.travel_date); return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dates}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${duration} · ${o.stops === 0 ? "bez przesiadek" : `${o.stops ?? "?"} przes.`}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}${renderPriceHistory(o)}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><div class="offer-mute-actions"><button data-mute-kind="offer" data-match="${m.id}">Wycisz ofertę</button><button data-mute-kind="airline" data-match="${m.id}">Wycisz linię</button><button data-mute-kind="route" data-match="${m.id}">Wycisz trasę</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`; }
-  function renderMutes() { const el = $("muteList"); if (!el) return; el.innerHTML = mutes.length ? `<span>Wyciszone:</span> ${mutes.map(mute => `<button class="mute-chip" data-unmute="${mute.id}">${esc(mute.label || mute.value)} ×</button>`).join("")}` : ""; document.querySelectorAll("[data-unmute]").forEach(btn => btn.onclick = () => unmute(btn.dataset.unmute)); }
-  async function muteOffer(matchId, kind) { const match = offers.find(item => item.id === matchId), offer = offerData(match); if (!offer?.id) return; const value = kind === "offer" ? offer.id : kind === "route" ? offer.route : (offer.airline || String(offer.airline_name || "").toUpperCase().replace(/\s+/g, " ")); const label = kind === "offer" ? `${routeName(offer.route)} · ${offer.airline_name}` : kind === "route" ? routeName(offer.route) : offer.airline_name; const { error } = await client.from("offer_mutes").upsert({ user_id: user.id, kind, value, label }, { onConflict: "user_id,kind,value" }); if (error) { alert(error.message); return; } await loadOffers(true); }
-  async function unmute(id) { const { error } = await client.from("offer_mutes").delete().eq("id", id).eq("user_id", user.id); if (error) { alert(error.message); return; } await loadOffers(true); }
+  function renderOffer(m) { const o = offerData(m); const mins = Number(o.duration_minutes || 0); const duration = mins ? `${Math.floor(mins / 60)}h ${mins % 60}m` : "—"; const stale = isOfferStale(o); const tags = [...(o.tags || []), ...(stale ? ["Cena niepotwierdzona"] : []), ...(o.verification_status === "pending_return" ? ["Powrót do potwierdzenia"] : [])].filter((tag, index, all) => all.indexOf(tag) === index).map(tag => `<span class="tag">${esc(tag)}</span>`).join(""); const aircraft = o.aircraft ? ` · 🛫 ${esc(o.aircraft)}` : ""; const dates = o.return_date ? `${dateFmt(o.travel_date)} → ${dateFmt(o.return_date)}` : dateFmt(o.travel_date); return `<article class="offer-card"><div class="card-top"><div><div class="stars">${"⭐".repeat(m.stars || 1)}</div><div class="route">${esc(routeName(o.route))}</div><div class="card-meta">✈ ${esc(o.airline_name)} · ${esc(CABINS[o.cabin] || o.cabin || "—")} · ${dates}</div></div><div class="price">${Number(o.price_pln || 0).toLocaleString("pl-PL")} PLN</div></div><div class="card-meta">${duration} · ${o.stops === 0 ? "bez przesiadek" : `${o.stops ?? "?"} przes.`}${aircraft} · ${esc(o.source)}</div>${tags ? `<div class="tags">${tags}</div>` : ""}${renderPriceHistory(o)}<div class="card-actions"><button data-feedback="buy" data-match="${m.id}">👍 Kupiłbym</button><button data-feedback="expensive" data-match="${m.id}">💸 Za drogo</button><button data-feedback="skip" data-match="${m.id}">🙅 Nie</button></div><a href="${safeHref(o.link)}" target="_blank" rel="noopener noreferrer">Otwórz ofertę →</a></article>`; }
   async function sendFeedback(verdict, matchId) { const { error } = await client.from("feedback").upsert({ user_id: user.id, match_id: matchId, verdict }, { onConflict: "user_id,match_id" }); if (error) { alert(error.message); return; } const updated = await client.from("user_matches").update({ feedback: verdict }).eq("id", matchId).eq("user_id", user.id); if (updated.error) { alert(updated.error.message); return; } const label = { buy: "Kupiłbym", expensive: "Za drogo", skip: "Pominięto" }[verdict] || verdict; alert(`Zapisano: ${label}`); }
   async function signInWithTelegram() {
     const button = $("telegramLoginButton");
