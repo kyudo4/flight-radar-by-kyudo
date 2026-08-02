@@ -1070,6 +1070,19 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("const airportLabel =", app)
         self.assertIn("map(airportLabel)", app)
 
+    def test_monitor_airports_use_city_search_and_store_iata_selections(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        html = (ROOT / "site" / "index.html").read_text()
+        styles = (ROOT / "site" / "styles.css").read_text()
+        self.assertIn("function airportSearchResults(query, selected)", app)
+        self.assertIn("function selectAirport(kind, code)", app)
+        self.assertIn("airportSelections.origins", app)
+        self.assertIn('data-airport-code=', app)
+        self.assertIn('aria-autocomplete="list"', html)
+        self.assertIn('id="monitorOriginsSuggestions"', html)
+        self.assertIn('id="monitorDestinationsSuggestions"', html)
+        self.assertIn(".airport-suggestions{position:absolute", styles)
+
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
         self.assertIn('from("monitors").select("*").eq("user_id", user.id)', app)
@@ -1282,8 +1295,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260803-15', html)
-        self.assertIn('styles.css?v=20260803-9', html)
+        self.assertIn('app.js?v=20260803-16', html)
+        self.assertIn('styles.css?v=20260803-10', html)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
         app = (ROOT / "site" / "app.js").read_text()

@@ -6,6 +6,7 @@
   const configReady = cfg.supabaseUrl && cfg.supabaseAnonKey && !String(cfg.supabaseUrl).includes("YOUR_") && !String(cfg.supabaseAnonKey).includes("YOUR_");
   let client = null, user = null, profile = null, monitors = [], offers = [], priceHistory = {};
   let editingMonitorId = null, airportDataReady = false, offerOffset = 0, offersHaveMore = false, offersLoading = false;
+  const airportSelections = { origins: [], destinations: [] };
   const OFFER_PAGE_SIZE = 40;
   const MAX_MONITOR_COMBINATIONS = 5000;
 
@@ -53,12 +54,78 @@
     }
   }
 
+  function airportSearchResults(query, selected) {
+    const needle = String(query || "").trim().toLocaleLowerCase("pl-PL");
+    if (!needle) return [];
+    const selectedCodes = new Set(selected);
+    return Object.entries(AIRPORTS).filter(([code, city]) => {
+      if (selectedCodes.has(code)) return false;
+      return `${code} ${city}`.toLocaleLowerCase("pl-PL").includes(needle);
+    }).sort(([codeA, cityA], [codeB, cityB]) => {
+      const rank = ([code, city]) => {
+        const codeValue = code.toLocaleLowerCase("pl-PL"), cityValue = city.toLocaleLowerCase("pl-PL");
+        return codeValue === needle ? 0 : cityValue.startsWith(needle) ? 1 : codeValue.startsWith(needle) ? 2 : 3;
+      };
+      return rank([codeA, cityA]) - rank([codeB, cityB]) || cityA.localeCompare(cityB, "pl");
+    }).slice(0, 8);
+  }
+
+  function renderAirportPicker(kind, query = "") {
+    const input = $(`monitor${kind === "origins" ? "Origins" : "Destinations"}`);
+    const suggestions = $(`monitor${kind === "origins" ? "Origins" : "Destinations"}Suggestions`);
+    const selected = airportSelections[kind];
+    $(`monitor${kind === "origins" ? "Origins" : "Destinations"}Selected`).innerHTML = selected.map(code => `<span class="airport-chip">${esc(airportLabel(code))}<button type="button" data-remove-airport="${esc(code)}" aria-label="Usuń ${esc(airportLabel(code))}">×</button></span>`).join("");
+    const results = airportSearchResults(query, selected);
+    suggestions.innerHTML = results.map(([code, city]) => `<button type="button" role="option" data-airport-code="${esc(code)}"><strong>${esc(city)}</strong><span>${esc(code)}</span></button>`).join("");
+    suggestions.classList.toggle("hidden", !results.length);
+    input.setAttribute("aria-expanded", results.length ? "true" : "false");
+  }
+
+  function selectAirport(kind, code) {
+    if (!airportSelections[kind].includes(code) && airportSelections[kind].length < 5) airportSelections[kind].push(code);
+    const input = $(`monitor${kind === "origins" ? "Origins" : "Destinations"}`);
+    input.value = "";
+    renderAirportPicker(kind);
+    updateMonitorEstimate();
+  }
+
+  function setupAirportPicker(kind) {
+    const suffix = kind === "origins" ? "Origins" : "Destinations";
+    const input = $(`monitor${suffix}`), suggestions = $(`monitor${suffix}Suggestions`), selected = $(`monitor${suffix}Selected`);
+    input.oninput = () => renderAirportPicker(kind, input.value);
+    input.onfocus = () => renderAirportPicker(kind, input.value);
+    input.onkeydown = event => {
+      if (event.key === "Enter") {
+        const first = suggestions.querySelector("[data-airport-code]");
+        if (first) { event.preventDefault(); selectAirport(kind, first.dataset.airportCode); }
+      }
+    };
+    input.onblur = () => window.setTimeout(() => suggestions.classList.add("hidden"), 120);
+    suggestions.onclick = event => {
+      const option = event.target.closest("[data-airport-code]");
+      if (option) selectAirport(kind, option.dataset.airportCode);
+    };
+    selected.onclick = event => {
+      const button = event.target.closest("[data-remove-airport]");
+      if (!button) return;
+      airportSelections[kind] = airportSelections[kind].filter(code => code !== button.dataset.removeAirport);
+      renderAirportPicker(kind);
+      updateMonitorEstimate();
+    };
+  }
+
+  function setAirportSelections(kind, values) {
+    airportSelections[kind] = [...new Set((values || []).map(value => String(value).trim().toUpperCase()).filter(value => /^[A-Z]{3}$/.test(value) && (!airportDataReady || AIRPORTS[value])))].slice(0, 5);
+    renderAirportPicker(kind);
+  }
+
   async function init() {
     $("themeButton").onclick = () => { document.body.classList.toggle("dark"); localStorage.setItem("afr-theme", document.body.classList.contains("dark") ? "dark" : "light"); };
     if (localStorage.getItem("afr-theme") === "dark") document.body.classList.add("dark");
     $("signOutButton").onclick = () => client?.auth.signOut();
     $("telegramLoginButton").onclick = signInWithTelegram;
     await loadAirportData();
+    setupAirportPicker("origins"); setupAirportPicker("destinations");
     if (!configReady || !window.supabase) { show("setupView"); return; }
     client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
     const { data, error } = await client.auth.getSession();
@@ -182,8 +249,8 @@
   function updateMonitorEstimate() {
     const from = $("monitorFrom")?.value, to = $("monitorTo")?.value;
     const trip = $("monitorTripType")?.value || "one_way";
-    const origins = csv($("monitorOrigins")?.value || "").length;
-    const destinations = csv($("monitorDestinations")?.value || "").length;
+    const origins = airportSelections.origins.length;
+    const destinations = airportSelections.destinations.length;
     const cabins = document.querySelectorAll("input[name='monitorCabin']:checked").length || 1;
     if (!from || !to || from > to || !origins || !destinations) { $("monitorQueryEstimate").textContent = ""; return; }
     const days = Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1;
@@ -210,7 +277,8 @@
     $("monitorDialogEyebrow").textContent = editingMonitorId ? "Edycja monitora" : "Nowy monitor";
     $("monitorDialogTitle").textContent = editingMonitorId ? "Zmień własne kryteria" : "Ustaw własne kryteria";
     $("monitorName").value = monitor?.name || "";
-    $("monitorOrigins").value = (f.origins || []).join(", "); $("monitorDestinations").value = (f.destinations || []).join(", ");
+    setAirportSelections("origins", f.origins || []); setAirportSelections("destinations", f.destinations || []);
+    $("monitorOrigins").value = ""; $("monitorDestinations").value = "";
     $("monitorTripType").value = f.trip_type || "one_way";
     $("monitorFrom").value = f.from || ""; $("monitorTo").value = f.to || "";
     $("monitorReturnFrom").value = f.return_from || ""; $("monitorReturnTo").value = f.return_to || "";
@@ -225,7 +293,7 @@
   async function saveMonitor(e) {
     e.preventDefault(); if (!editingMonitorId && monitors.length >= 2) { $("formMessage").textContent = "Limit dwóch monitorów na osobę."; return; }
     const name = $("monitorName").value.trim();
-    const origins = csv($("monitorOrigins").value), destinations = csv($("monitorDestinations").value);
+    const origins = [...airportSelections.origins], destinations = [...airportSelections.destinations];
     const trip = $("monitorTripType").value, from = $("monitorFrom").value, to = $("monitorTo").value;
     const returnFrom = $("monitorReturnFrom").value, returnTo = $("monitorReturnTo").value;
     const cabins = [...document.querySelectorAll("input[name='monitorCabin']:checked")].map(input => input.value), budgetRaw = $("monitorBudget").value.trim(), durationRaw = $("monitorDuration").value.trim(), stopsRaw = $("monitorStops").value.trim();
@@ -233,7 +301,7 @@
     const budget = Number(budgetRaw), maxDuration = durationRaw ? Number(durationRaw) : null, maxStops = Number(stopsRaw), telegramStars = Number(starsRaw), telegramDrop = Number(dropRaw);
     const validIata = values => values.length > 0 && values.every(value => /^[A-Z]{3}$/.test(value) && (!airportDataReady || Boolean(AIRPORTS[value])));
     if (!name) { $("formMessage").textContent = "Podaj nazwę monitoringu."; return; }
-    if (!validIata(origins) || !validIata(destinations) || origins.length > 5 || destinations.length > 5) { $("formMessage").textContent = "Wpisz od 1 do 5 prawidłowych kodów lotnisk IATA po każdej stronie."; return; }
+    if (!validIata(origins) || !validIata(destinations) || origins.length > 5 || destinations.length > 5) { $("formMessage").textContent = "Wybierz od 1 do 5 lotnisk wylotu i celu z podpowiedzi."; return; }
     const days = from && to ? Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1 : 0;
     if (!from || !to || from > to || days > 32) { $("formMessage").textContent = "Zakres dat jest nieprawidłowy (maksymalnie 32 dni)."; return; }
     const returnDays = returnFrom && returnTo ? Math.round((new Date(`${returnTo}T12:00:00`) - new Date(`${returnFrom}T12:00:00`)) / 86400000) + 1 : 0;
