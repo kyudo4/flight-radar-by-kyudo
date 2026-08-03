@@ -393,6 +393,31 @@ def mark_stale_offers():
         log("Nie udało się oznaczyć starych ofert: %s" % str(exc)[:120])
 
 
+def can_mark_stale_after_scan(*, selected_tasks, total_tasks, executed_tasks,
+                              successful_google_tasks, failed_google_tasks,
+                              blocked, source_degraded, source_capacity_reached,
+                              runtime_limit_reached, sync_errors):
+    """Return whether this run proved enough source health to age old offers.
+
+    Staleness is a global property of prices, so a partial or failed queue
+    must never update it. In particular, a Google parser/CAPTCHA failure can
+    otherwise make every previously seen offer disappear from the default
+    "current prices" view even though the database still contains it.
+    """
+    return bool(
+        selected_tasks > 0
+        and selected_tasks == total_tasks
+        and executed_tasks == selected_tasks
+        and successful_google_tasks == selected_tasks
+        and failed_google_tasks == 0
+        and not blocked
+        and not source_degraded
+        and not source_capacity_reached
+        and not runtime_limit_reached
+        and not sync_errors
+    )
+
+
 def fetch_task(task):
     """Ponawia tylko błędy sieciowe; blokadę Google zgłasza od razu."""
     last_error = None
@@ -978,7 +1003,6 @@ def main():
         # Ta gałąź chroni stare ręczne uruchomienia przed rozpoczęciem skanu.
         log("Odbiór Telegrama jest obsługiwany przez telegram_feedback.py")
         return
-    mark_stale_offers()
     now = datetime.utcnow()
     active_profiles = api("GET", "profiles", params={"status": "eq.active", "select": "id", "limit": "20"})
     active_ids = [row["id"] for row in active_profiles]
@@ -1145,6 +1169,21 @@ def main():
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
         source_unavailable = executed_count > 0 and failed_google_tasks > 0 and successful_google_tasks == 0
         final_status = "blocked" if blocked else ("error" if source_degraded or source_unavailable else ("partial" if task_errors or source_capacity_reached or runtime_limit_reached else "ok"))
+        # Do this only after every queued Google task in this run succeeded.
+        # A failed/partial source response must preserve the previous offer
+        # state; otherwise one Google outage hides all prices from the default
+        # current-price view before we know whether the source is healthy.
+        if can_mark_stale_after_scan(
+            selected_tasks=len(tasks), total_tasks=len(all_tasks),
+            executed_tasks=executed_count,
+            successful_google_tasks=successful_google_tasks,
+            failed_google_tasks=failed_google_tasks,
+            blocked=blocked, source_degraded=source_degraded,
+            source_capacity_reached=source_capacity_reached,
+            runtime_limit_reached=runtime_limit_reached,
+            sync_errors=sync_errors,
+        ):
+            mark_stale_offers()
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": final_status, "blocked": blocked, "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
         log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
         if blocked:

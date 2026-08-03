@@ -1344,6 +1344,30 @@ class FlightRadarRegressionTests(unittest.TestCase):
         finally:
             scanner.STALE_SCHEMA_SUPPORTED = previous
 
+    def test_stale_marking_requires_a_complete_healthy_google_scan(self):
+        healthy = dict(
+            selected_tasks=3, total_tasks=3, executed_tasks=3,
+            successful_google_tasks=3, failed_google_tasks=0,
+            blocked=False, source_degraded=False,
+            source_capacity_reached=False, runtime_limit_reached=False,
+            sync_errors=[],
+        )
+        self.assertTrue(scanner.can_mark_stale_after_scan(**healthy))
+        for field, value in {
+            "selected_tasks": 2,
+            "executed_tasks": 2,
+            "successful_google_tasks": 2,
+            "failed_google_tasks": 1,
+            "blocked": True,
+            "source_degraded": True,
+            "source_capacity_reached": True,
+            "runtime_limit_reached": True,
+            "sync_errors": ["queue error"],
+        }.items():
+            broken = dict(healthy)
+            broken[field] = value
+            self.assertFalse(scanner.can_mark_stale_after_scan(**broken), field)
+
     def test_latest_retention_removes_old_details_after_durable_aggregation(self):
         migration = (ROOT / "supabase" / "migrations" / "20260802000600_durable_preferences.sql").read_text()
         cleanup = migration.split("-- Detailed past results are disposable", 1)[1]
