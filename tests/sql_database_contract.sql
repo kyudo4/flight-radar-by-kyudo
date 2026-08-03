@@ -15,8 +15,8 @@ create table public.profiles (
   id uuid primary key,
   status text not null default 'active'
 );
-create function public.is_active_user(candidate uuid) returns boolean language sql stable as $$
-  select exists (select 1 from public.profiles where id = candidate and status = 'active')
+create function public.is_active_user(user_id uuid) returns boolean language sql stable as $$
+  select exists (select 1 from public.profiles where id = user_id and status = 'active')
 $$;
 
 create table public.invites (
