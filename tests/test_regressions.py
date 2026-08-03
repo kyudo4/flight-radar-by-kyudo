@@ -1350,7 +1350,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             successful_google_tasks=3, failed_google_tasks=0,
             blocked=False, source_degraded=False,
             source_capacity_reached=False, runtime_limit_reached=False,
-            sync_errors=[],
+            sync_errors=[], task_errors=[],
         )
         self.assertTrue(scanner.can_mark_stale_after_scan(**healthy))
         for field, value in {
@@ -1363,10 +1363,19 @@ class FlightRadarRegressionTests(unittest.TestCase):
             "source_capacity_reached": True,
             "runtime_limit_reached": True,
             "sync_errors": ["queue error"],
+            "task_errors": ["write error"],
         }.items():
             broken = dict(healthy)
             broken[field] = value
             self.assertFalse(scanner.can_mark_stale_after_scan(**broken), field)
+
+    def test_stale_marking_rejects_a_partial_global_queue(self):
+        self.assertFalse(scanner.can_mark_stale_after_scan(
+            selected_tasks=3, total_tasks=8, executed_tasks=3,
+            successful_google_tasks=3, failed_google_tasks=0,
+            blocked=False, source_degraded=False,
+            source_capacity_reached=False, runtime_limit_reached=False,
+            sync_errors=[], task_errors=[]))
 
     def test_latest_retention_removes_old_details_after_durable_aggregation(self):
         migration = (ROOT / "supabase" / "migrations" / "20260802000600_durable_preferences.sql").read_text()

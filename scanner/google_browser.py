@@ -293,9 +293,9 @@ def _page():
 
 
 def _load_cards(page, url, returning=False):
-    """Load cards with one clean retry for Google's occasional empty render."""
+    """Load cards with bounded retries for Google's slow/consent renders."""
     last_error = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             _consume_query_slot()
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -332,11 +332,15 @@ def _load_cards(page, url, returning=False):
             if any(marker in body for marker in (
                     "unusual traffic", "not a robot", "captcha", "before you continue")):
                 raise BrowserBlockedError("Google pokazał blokadę w awaryjnym Chrome") from exc
-        if attempt == 0:
-            page.wait_for_timeout(1800)
+        if attempt < 2:
+            # The first post-consent navigation on a cold GitHub runner can
+            # need more time for Google's result RPC. Keep this bounded so a
+            # real block still fails quickly and the browser budget remains
+            # finite.
+            page.wait_for_timeout(1800 * (attempt + 1))
     direction = "powrotnych" if returning else "wylotowych"
     raise BrowserParseError(
-        "Awaryjny Chrome po dwóch próbach nie znalazł kart %s: %s"
+        "Awaryjny Chrome po trzech próbach nie znalazł kart %s: %s"
         % (direction, str(last_error)[:120])
     ) from last_error
 

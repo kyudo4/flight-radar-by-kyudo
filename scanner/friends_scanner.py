@@ -209,6 +209,19 @@ def task_from_item(item):
             "user_ids": [item["user_id"]]}
 
 
+def tasks_from_items(items):
+    """Collapse queue rows into the unique source queries they represent."""
+    tasks_by_key = {}
+    for item in items:
+        task = task_from_item(item)
+        key = task_key(task)
+        tasks_by_key.setdefault(key, {**task, "item_ids": [], "monitor_ids": [], "user_ids": []})
+        tasks_by_key[key]["item_ids"].extend(task["item_ids"])
+        tasks_by_key[key]["monitor_ids"].extend(task["monitor_ids"])
+        tasks_by_key[key]["user_ids"].extend(task["user_ids"])
+    return list(tasks_by_key.values())
+
+
 def sync_monitor_scan_items(monitor):
     """Materializuje każdą kombinację monitora jako niezależną pozycję kolejki."""
     desired = monitor_combinations(monitor)
@@ -396,7 +409,7 @@ def mark_stale_offers():
 def can_mark_stale_after_scan(*, selected_tasks, total_tasks, executed_tasks,
                               successful_google_tasks, failed_google_tasks,
                               blocked, source_degraded, source_capacity_reached,
-                              runtime_limit_reached, sync_errors):
+                              runtime_limit_reached, sync_errors, task_errors=None):
     """Return whether this run proved enough source health to age old offers.
 
     Staleness is a global property of prices, so a partial or failed queue
@@ -415,6 +428,7 @@ def can_mark_stale_after_scan(*, selected_tasks, total_tasks, executed_tasks,
         and not source_capacity_reached
         and not runtime_limit_reached
         and not sync_errors
+        and not task_errors
     )
 
 
@@ -1032,16 +1046,13 @@ def main():
         item["user_id"] = active_by_id[item["monitor_id"]]["user_id"]
     limits = adaptive_query_limits()
     due_items = select_scan_items(all_due_items, max_standard=limits["standard"], max_first=limits["first"])
-    tasks_by_key = {}
-    for item in due_items:
-        task = task_from_item(item)
-        tasks_by_key.setdefault(task_key(task), {**task, "item_ids": [], "monitor_ids": [], "user_ids": []})
-        tasks_by_key[task_key(task)]["item_ids"].extend(task["item_ids"])
-        tasks_by_key[task_key(task)]["monitor_ids"].extend(task["monitor_ids"])
-        tasks_by_key[task_key(task)]["user_ids"].extend(task["user_ids"])
-    all_tasks = list(tasks_by_key.values())
-    first_tasks = [task for task in all_tasks if task["cabin"] == "first"][:limits["first"]]
-    standard_tasks = [task for task in all_tasks if task["cabin"] != "first"][:limits["standard"]]
+    # Keep the unbounded unique queue as the completion reference. Comparing
+    # against a list created after select_scan_items() made a partial scan look
+    # complete and could age unrelated offers globally.
+    all_tasks = tasks_from_items(all_due_items)
+    selected_tasks = tasks_from_items(due_items)
+    first_tasks = [task for task in selected_tasks if task["cabin"] == "first"][:limits["first"]]
+    standard_tasks = [task for task in selected_tasks if task["cabin"] != "first"][:limits["standard"]]
     tasks = standard_tasks + first_tasks
     log("Aktywne monitory: %d, zaległe kombinacje: %d, wybrane elementy: %d, zapytania w tym przebiegu: %d, limity: %d + %d First" % (len(active), len(all_due_items), len(due_items), len(tasks), limits["standard"], limits["first"]))
     run = None
@@ -1182,6 +1193,7 @@ def main():
             source_capacity_reached=source_capacity_reached,
             runtime_limit_reached=runtime_limit_reached,
             sync_errors=sync_errors,
+            task_errors=task_errors,
         ):
             mark_stale_offers()
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": final_status, "blocked": blocked, "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
