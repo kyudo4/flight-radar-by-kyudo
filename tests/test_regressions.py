@@ -1458,6 +1458,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("on conflict (version) do nothing", script)
         self.assertIn("run_direct_sql", script)
         self.assertIn("Management API unavailable", script)
+        self.assertIn("pooler.supabase.com", script)
+        self.assertIn("PGSSLMODE", script)
 
     def test_frontend_handles_invalid_invite_and_friendly_scan_statuses(self):
         app = (ROOT / "site" / "app.js").read_text()

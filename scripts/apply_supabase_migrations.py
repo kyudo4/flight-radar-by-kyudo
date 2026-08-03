@@ -23,6 +23,22 @@ MIGRATION_DIR = Path(os.environ.get("SUPABASE_MIGRATION_DIR", "supabase/migratio
 MIN_VERSION = os.environ.get("SUPABASE_MIGRATION_MIN_VERSION", "20260803")
 API_URL = f"https://api.supabase.com/v1/projects/{PROJECT_REF}/database/query"
 VERSION_RE = re.compile(r"^(\d{14})_(.+)\.sql$")
+DIRECT_CONNECTION = None
+POOLER_REGIONS = (
+    "eu-central-1",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "eu-north-1",
+    "us-east-1",
+    "us-west-1",
+    "ca-central-1",
+    "sa-east-1",
+    "ap-southeast-1",
+    "ap-southeast-2",
+    "ap-northeast-1",
+    "ap-south-1",
+)
 
 
 def _detail(body):
@@ -70,51 +86,84 @@ def run_sql(query):
 
 def run_direct_sql(query=None, path=None):
     """Run SQL through psql without ever putting the password in arguments."""
+    global DIRECT_CONNECTION
     password = os.environ.get("SUPABASE_DB_PASSWORD")
     if not password:
         raise RuntimeError(
             "SUPABASE_DB_PASSWORD is required for the direct database fallback"
         )
-    command = [
-        "psql",
-        "--no-psqlrc",
-        "--tuples-only",
-        "--no-align",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-h",
-        os.environ.get("SUPABASE_DB_HOST", f"db.{PROJECT_REF}.supabase.co"),
-        "-p",
-        os.environ.get("SUPABASE_DB_PORT", "5432"),
-        "-U",
-        os.environ.get("SUPABASE_DB_USER", "postgres"),
-        "-d",
-        os.environ.get("SUPABASE_DB_NAME", "postgres"),
-    ]
-    if query is not None:
-        command.extend(["-c", query])
-    elif path is not None:
-        command.extend(["-f", str(path)])
-    else:
+    if query is None and path is None:
         raise RuntimeError("direct SQL execution needs a query or file")
-    environment = os.environ.copy()
-    environment["PGPASSWORD"] = password
-    completed = subprocess.run(
-        command,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
+
+    explicit_host = os.environ.get("SUPABASE_DB_HOST")
+    if DIRECT_CONNECTION is not None:
+        candidates = [DIRECT_CONNECTION]
+    elif explicit_host:
+        candidates = [
+            {
+                "host": explicit_host,
+                "port": os.environ.get("SUPABASE_DB_PORT", "5432"),
+                "user": os.environ.get("SUPABASE_DB_USER", "postgres"),
+            }
+        ]
+    else:
+        candidates = [
+            {
+                "host": f"aws-0-{region}.pooler.supabase.com",
+                "port": "6543",
+                "user": f"postgres.{PROJECT_REF}",
+            }
+            for region in POOLER_REGIONS
+        ]
+
+    errors = []
+    for connection in candidates:
+        command = [
+            "psql",
+            "--no-psqlrc",
+            "--tuples-only",
+            "--no-align",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-h",
+            connection["host"],
+            "-p",
+            connection["port"],
+            "-U",
+            connection["user"],
+            "-d",
+            os.environ.get("SUPABASE_DB_NAME", "postgres"),
+        ]
+        if query is not None:
+            command.extend(["-c", query])
+        else:
+            command.extend(["-f", str(path)])
+        environment = os.environ.copy()
+        environment["PGPASSWORD"] = password
+        environment["PGSSLMODE"] = os.environ.get("SUPABASE_DB_SSLMODE", "require")
+        environment["PGCONNECT_TIMEOUT"] = os.environ.get("SUPABASE_DB_CONNECT_TIMEOUT", "5")
+        completed = subprocess.run(
+            command,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode == 0:
+            DIRECT_CONNECTION = connection
+            rows = []
+            for line in completed.stdout.splitlines():
+                value = line.strip()
+                if value:
+                    rows.append({"version": value})
+            return rows
         detail = (completed.stderr or completed.stdout or "request rejected").strip()
-        raise RuntimeError(f"direct PostgreSQL migration failed: {detail[:240]}")
-    rows = []
-    for line in completed.stdout.splitlines():
-        value = line.strip()
-        if value:
-            rows.append({"version": value})
-    return rows
+        errors.append(f"{connection['host']}: {detail[:160]}")
+        if explicit_host:
+            break
+    raise RuntimeError(
+        "direct PostgreSQL migration failed; tried " + "; ".join(errors)
+    )
 
 
 def migration_files():
