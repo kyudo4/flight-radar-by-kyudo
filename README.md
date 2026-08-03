@@ -48,8 +48,10 @@ jej stanu, tokenów Telegrama ani historii alertów.
    najnowszej migracji funkcja ma kompatybilny tryb przejściowy.
 4. Ustaw adres projektu i anon key w `site/config.js` na podstawie `site/config.example.js`.
 5. Ustaw sekrety GitHub Actions: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `SUPABASE_ANON_KEY`, `TG_BOT_TOKEN`, `SUPABASE_ACCESS_TOKEN`,
-   `SUPABASE_PROJECT_REF` oraz `SUPABASE_DB_PASSWORD`.
+   `SUPABASE_ANON_KEY`, `TG_BOT_TOKEN`, `SUPABASE_ACCESS_TOKEN` oraz
+   `SUPABASE_PROJECT_REF`. Token Supabase musi mieć dostęp Management API
+   `database_read` i `database_write`, ponieważ workflow wykonuje zapytania
+   migracyjne po stronie serwera.
 6. Zaloguj się pierwszy raz przez Telegram, odczytaj `telegram_user_id` z
    `public.profiles` i wykonaj `supabase/bootstrap-admin.sql` po jego wpisaniu.
 7. Włącz GitHub Pages przez workflow `Publish Flight Radar by Kyudo dashboard`.
@@ -64,9 +66,9 @@ jej stanu, tokenów Telegrama ani historii alertów.
    `telegram-auth` i `admin-scan`. W GitHub Secrets muszą być ustawione
    `SUPABASE_ACCESS_TOKEN` oraz `SUPABASE_PROJECT_REF`; bez nich zmiana funkcji
    nie powinna być uznana za wdrożoną.
-12. Workflow `Apply Flight Radar Supabase migrations` wykonuje oczekujące migracje
-    przed użyciem nowych funkcji bazy przez standardowe `supabase db push`.
-    Hasło bazy pozostaje wyłącznie w GitHub Actions i nie trafia do kodu ani strony.
+12. Workflow `Apply Flight Radar Supabase migrations` nakłada nowe migracje audytowe
+    przez Management API i zapisuje ich wersje w historii Supabase. Nie odtwarza
+    starego schematu skonfigurowanego ręcznie i nie wymaga hasła bazy danych.
 
 Do działania skanera potrzebny jest Python 3.11. Lekki odczyt Google działa przez
 `fast-flights`, a przy przeniesieniu danych do JavaScript automatycznie uruchamiany

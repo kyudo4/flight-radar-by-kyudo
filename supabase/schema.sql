@@ -425,6 +425,38 @@ create trigger hide_monitor_matches_on_filter_change
   after update of filters on public.monitors
   for each row execute procedure public.hide_monitor_matches_on_filter_change();
 
+create or replace function public.valid_round_trip_pair_count(
+  p_from date,
+  p_to date,
+  p_return_from date,
+  p_return_to date
+)
+returns bigint
+language plpgsql
+immutable
+set search_path = public
+as $$
+declare
+  departure date;
+  first_valid_return date;
+  pair_count bigint := 0;
+begin
+  if p_from is null or p_to is null or p_return_from is null or p_return_to is null
+     or p_to < p_from or p_return_to < p_return_from then
+    return 0;
+  end if;
+  departure := p_from;
+  while departure <= p_to loop
+    first_valid_return := greatest(p_return_from, departure + 1);
+    if first_valid_return <= p_return_to then
+      pair_count := pair_count + (p_return_to - first_valid_return + 1);
+    end if;
+    departure := departure + 1;
+  end loop;
+  return pair_count;
+end;
+$$;
+
 create or replace function public.validate_monitor_filters()
 returns trigger language plpgsql set search_path = public as $$
 declare
@@ -451,7 +483,7 @@ begin
      or jsonb_typeof(coalesce(new.filters -> 'destinations', 'null'::jsonb)) <> 'array' then
     raise exception 'Lotniska muszą być zapisane jako listy';
   end if;
-  from_date := (new.filters ->> 'from')::date;
+  from_date := nullif(new.filters ->> 'from', '')::date;
   to_date := (new.filters ->> 'to')::date;
   return_from_date := nullif(new.filters ->> 'return_from', '')::date;
   return_to_date := nullif(new.filters ->> 'return_to', '')::date;
@@ -489,7 +521,8 @@ begin
   cabin_count := case when new.filters ? 'cabins' then jsonb_array_length(new.filters -> 'cabins') else 1 end;
   combination_count := origin_count * destination_count * (to_date - from_date + 1) * cabin_count;
   if trip = 'round_trip' then
-    combination_count := combination_count * (return_to_date - return_from_date + 1);
+    combination_count := origin_count * destination_count * cabin_count
+      * public.valid_round_trip_pair_count(from_date, to_date, return_from_date, return_to_date);
   end if;
   if combination_count > 5000 then
     raise exception 'Monitor ma zbyt wiele kombinacji do bezpiecznego skanowania (maksymalnie 5000)';
@@ -823,6 +856,7 @@ revoke execute on function public.prevent_self_privilege_change() from public, a
 revoke execute on function public.enforce_monitor_limit() from public, anon, authenticated;
 revoke execute on function public.touch_updated_at() from public, anon, authenticated;
 revoke execute on function public.validate_monitor_filters() from public, anon, authenticated;
+revoke execute on function public.valid_round_trip_pair_count(date, date, date, date) from public, anon, authenticated;
 
 revoke execute on function public.is_admin() from public;
 revoke execute on function public.is_active_user(uuid) from public;

@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Apply new production migrations without replaying the legacy baseline.
+
+The first private deployment was bootstrapped in the Supabase SQL editor, so
+the remote migration ledger is not guaranteed to contain every historical
+file. New migrations are therefore applied through Supabase's Management API
+and recorded in the same ledger after successful execution. Each migration is
+idempotent and is applied in filename order.
+"""
+
+import json
+import os
+import re
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+PROJECT_REF = os.environ["SUPABASE_PROJECT_REF"]
+ACCESS_TOKEN = os.environ["SUPABASE_ACCESS_TOKEN"]
+MIGRATION_DIR = Path(os.environ.get("SUPABASE_MIGRATION_DIR", "supabase/migrations"))
+MIN_VERSION = os.environ.get("SUPABASE_MIGRATION_MIN_VERSION", "20260803")
+API_URL = f"https://api.supabase.com/v1/projects/{PROJECT_REF}/database/query"
+VERSION_RE = re.compile(r"^(\d{14})_(.+)\.sql$")
+
+
+def _detail(body):
+    try:
+        payload = json.loads(body.decode("utf-8", errors="replace"))
+    except (TypeError, ValueError):
+        return "request rejected"
+    if isinstance(payload, dict):
+        for key in ("message", "error", "error_description"):
+            if payload.get(key):
+                return str(payload[key])[:240]
+    return "request rejected"
+
+
+def run_sql(query):
+    request = urllib.request.Request(
+        API_URL,
+        data=json.dumps({"query": query}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(
+            f"Supabase Management API HTTP {exc.code}: {_detail(exc.read())}"
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"Supabase Management API connection failed: {exc}") from exc
+    if isinstance(payload, dict) and payload.get("error"):
+        raise RuntimeError(
+            f"Supabase Management API rejected SQL: {str(payload['error'])[:240]}"
+        )
+    if isinstance(payload, dict):
+        result = payload.get("result", [])
+        if isinstance(result, dict):
+            return result.get("rows") or result.get("data") or []
+        return result if isinstance(result, list) else []
+    return payload if isinstance(payload, list) else []
+
+
+def migration_files():
+    files = []
+    for path in sorted(MIGRATION_DIR.glob("*.sql")):
+        match = VERSION_RE.match(path.name)
+        if match and match.group(1) >= MIN_VERSION:
+            files.append((match.group(1), match.group(2), path))
+    return files
+
+
+def main():
+    files = migration_files()
+    if not files:
+        print("No pending production migrations in the configured range")
+        return
+
+    rows = run_sql(
+        "select version from supabase_migrations.schema_migrations "
+        "where version >= '%s' order by version" % MIN_VERSION.replace("'", "''")
+    )
+    applied = {
+        str(row.get("version"))
+        for row in rows
+        if isinstance(row, dict) and row.get("version") is not None
+    }
+    for version, name, path in files:
+        if version in applied:
+            print(f"Already applied {version}")
+            continue
+        run_sql(path.read_text(encoding="utf-8"))
+        safe_version = version.replace("'", "''")
+        safe_name = name.replace("'", "''")
+        run_sql(
+            "insert into supabase_migrations.schema_migrations(version, name, statements) "
+            f"values ('{safe_version}', '{safe_name}', ARRAY[]::text[]) "
+            "on conflict (version) do nothing"
+        )
+        print(f"Applied {version}")
+
+
+if __name__ == "__main__":
+    main()

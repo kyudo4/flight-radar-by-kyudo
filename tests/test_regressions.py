@@ -1208,6 +1208,12 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("Run pre-deploy verification", pages)
         self.assertIn("python -m unittest discover -s tests -v", pages)
 
+    def test_browser_smoke_check_has_the_same_chromium_fallback_as_scanner(self):
+        source = (ROOT / "scripts" / "check_browser_runtime.py").read_text()
+        self.assertIn('channel="chrome"', source)
+        self.assertIn("bundled Chromium", source)
+        self.assertGreaterEqual(source.count("playwright.chromium.launch("), 2)
+
     def test_duration_limit_is_optional_and_unlimited_by_default(self):
         app = (ROOT / "site" / "app.js").read_text()
         html = (ROOT / "site" / "index.html").read_text()
@@ -1388,6 +1394,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("maksymalnie 5000", migration)
         self.assertIn("return_to_date <= from_date", schema)
         self.assertIn("return_to_date <= from_date", migration)
+        self.assertIn("valid_round_trip_pair_count", schema)
+        self.assertIn("valid_round_trip_pair_count", migration)
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
@@ -1442,8 +1450,11 @@ class FlightRadarRegressionTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
         self.assertIn('"supabase/migrations/**"', workflow)
         self.assertIn("SUPABASE_ACCESS_TOKEN", workflow)
-        self.assertIn("SUPABASE_DB_PASSWORD", workflow)
-        self.assertIn("supabase db push", workflow)
+        self.assertNotIn("SUPABASE_DB_PASSWORD", workflow)
+        self.assertIn("scripts/apply_supabase_migrations.py", workflow)
+        script = (ROOT / "scripts" / "apply_supabase_migrations.py").read_text()
+        self.assertIn("supabase_migrations.schema_migrations", script)
+        self.assertIn("on conflict (version) do nothing", script)
 
     def test_frontend_handles_invalid_invite_and_friendly_scan_statuses(self):
         app = (ROOT / "site" / "app.js").read_text()
