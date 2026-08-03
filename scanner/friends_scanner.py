@@ -531,7 +531,13 @@ def task_key(task):
 
 
 def offer_fingerprint(task, flight):
-    raw = "%s|%s|%s|%s|%s|%s|%s|%s|%s" % (task["origin"], task["dest"], task["date"], task.get("return_date") or "", task.get("trip_type") or ("round_trip" if task.get("return_date") else "one_way"), task["cabin"], flight.get("airline", ""), flight.get("departure", ""), flight.get("duration_h", ""))
+    raw = "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % (
+        task["origin"], task["dest"], task["date"], task.get("return_date") or "",
+        task.get("trip_type") or ("round_trip" if task.get("return_date") else "one_way"),
+        task["cabin"], flight.get("airline", ""), flight.get("departure", ""),
+        flight.get("duration_h", ""), flight.get("return_departure", ""),
+        flight.get("return_duration_h", ""), flight.get("return_stops", ""),
+    )
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
@@ -726,7 +732,11 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
         if flight.get("airline") in PRIORITY and ratio <= 0.90:
             stars = min(5, stars + 1)
     else:
-        stars = 5 if price <= budget * .55 else 4 if price <= budget * .75 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
+        # A sparse route still needs a useful first-pass rating.  A fare at
+        # least 10% below the user's hard ceiling is interesting even when
+        # Google returned fewer than three comparable cards; otherwise a good
+        # offer could be hidden by a 4/5-star Telegram threshold.
+        stars = 5 if price <= budget * .55 else 4 if price <= budget * .90 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
         if flight.get("airline") in PRIORITY:
             stars = min(5, stars + 1)
     preferred = {str(value).strip().upper() for value in filters.get("preferred_airlines", []) if str(value).strip()}
@@ -989,6 +999,8 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     is_new_low = bool(current_price is not None and (previous_min is None or current_price < previous_min))
     is_new_airline = bool(airline and airline not in route_airlines)
     round_trip_verified = "Powrót do potwierdzenia" not in (offer.get("tags") or [])
+    if trip_type_value == "round_trip" and flight.get("purchase_link_verified") is False:
+        round_trip_verified = False
     match = {"user_id": monitor["user_id"], "monitor_id": monitor["id"], "offer_id": offer["id"], "stars": stars,
              "telegram_eligible": round_trip_verified and (is_new_low or is_new_airline) and stars >= int(rules.get("min_stars") or 4),
              "new_airline": is_new_airline,
@@ -1175,7 +1187,12 @@ def main():
         # RSS nie zużywa limitu zapytań Google, ale przechodzi ten sam filtr
         # dat, klasy, trasy i osobnych reguł Telegrama.
         rss_active = [m for m in active if trip_type(m.get("filters") or {}) == "one_way"]
-        for monitor, flight, origin, dest, travel_date in rss.candidates(rss_active):
+        rss_candidates = rss.candidates(rss_active)
+        for source_name, source_state in rss.FEED_STATUS.items():
+            if not source_state.get("ok"):
+                task_errors.append("RSS-%s: źródło niedostępne: %s" % (source_name, source_state.get("error") or "nieznany błąd"))
+                log("RSS nie odpowiada: %s" % task_errors[-1])
+        for monitor, flight, origin, dest, travel_date in rss_candidates:
             task = {"origin": origin, "dest": dest, "date": travel_date,
                     "cabin": str(flight.get("cabin") or "BUSINESS").lower().replace("_", "-")}
             try:

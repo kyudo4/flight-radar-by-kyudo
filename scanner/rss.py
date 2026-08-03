@@ -23,6 +23,7 @@ AIRLINES = {"qatar": "QR", "etihad": "EY", "emirates": "EK", "oman air": "WY", "
 MONTHS = {"january":1,"february":2,"march":3,"april":4,"may":5,"june":6,"july":7,"august":8,"september":9,"october":10,"november":11,"december":12,"września":9,"wrzesień":9}
 AIRPORT_NAMES = json.loads((ROOT.parent / "site" / "airports.json").read_text(encoding="utf-8"))
 AIRPORT_ALIASES = {**ORIGINS, **DESTS}
+FEED_STATUS = {}
 
 
 def clean(value):
@@ -63,6 +64,7 @@ def fresh(value):
 
 
 def items(feed):
+    name = feed.get("name", "RSS")
     try:
         req = urllib.request.Request(feed["url"], headers={"User-Agent": "FlightRadarByKyudo/2.0"})
         with urllib.request.urlopen(req, timeout=20) as response:
@@ -77,8 +79,12 @@ def items(feed):
                 continue
             link = node.find(atom + "link")
             result.append({"title": clean(node.findtext(atom + "title")), "description": clean(node.findtext(atom + "summary") or node.findtext(atom + "content")), "link": safe_link(link.get("href", "") if link is not None else ""), "source": feed["name"]})
+        FEED_STATUS[name] = {"ok": True, "count": len(result), "error": ""}
         return result[:60]
-    except Exception:
+    except Exception as exc:
+        # Keep the collector resilient, but expose the source failure to the
+        # scanner so a run cannot look healthy while a feed is unavailable.
+        FEED_STATUS[name] = {"ok": False, "count": 0, "error": str(exc)[:160]}
         return []
 
 
@@ -194,6 +200,7 @@ def premium_price(text):
 
 
 def candidates(monitors):
+    FEED_STATUS.clear()
     out = []
     origin_pool = sorted({str(code).upper() for monitor in monitors for code in (monitor.get("filters") or {}).get("origins", [])})
     destination_pool = sorted({str(code).upper() for monitor in monitors for code in (monitor.get("filters") or {}).get("destinations", [])})

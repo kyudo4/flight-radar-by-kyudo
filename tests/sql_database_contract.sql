@@ -97,6 +97,7 @@ create unique index monitor_scan_items_round_trip_key
 \ir ../supabase/migrations/20260802000600_durable_preferences.sql
 \ir ../supabase/migrations/20260802000700_preference_integrity.sql
 \ir ../supabase/migrations/20260802000800_atomic_scan_queue.sql
+\ir ../supabase/migrations/20260803000100_final_audit_hardening.sql
 
 insert into public.profiles(id) values ('00000000-0000-0000-0000-000000000001');
 insert into public.monitors(id, user_id, filters) values (

@@ -235,6 +235,39 @@ def _click_card(page, label):
     return False
 
 
+def _selected_itinerary_link(page, previous_url, wait_ms=1200):
+    """Return the URL after selecting an inbound card, if Google exposes one.
+
+    The return-results URL is only a list of choices.  Google normally
+    navigates to a selected itinerary/booking view after the inbound card is
+    clicked, but some layouts expose that URL through a booking link instead
+    of changing the browser location immediately.  Never pretend the list
+    URL is an exact itinerary link.
+    """
+    try:
+        page.wait_for_timeout(wait_ms)
+    except Exception:
+        pass
+    current_url = str(getattr(page, "url", "") or "")
+    if current_url and current_url != previous_url:
+        return current_url
+    selectors = (
+        'a[href*="/travel/flights/booking"]',
+        'a[href*="/travel/flights/search"]',
+        'a[href*="google.com/travel/flights"]',
+    )
+    for selector in selectors:
+        try:
+            links = page.locator(selector)
+            for index in range(min(links.count(), 20)):
+                href = links.nth(index).get_attribute("href") or ""
+                if re.match(r"^https?://", href, re.I) and href != previous_url:
+                    return href
+        except Exception:
+            continue
+    return ""
+
+
 def _close():
     global _RUNTIME, _PLAYWRIGHT, _BROWSER, _CONTEXT, _PAGE
     for resource in (_PAGE, _CONTEXT, _BROWSER):
@@ -420,6 +453,22 @@ def fetch_rendered(url, return_date=None):
             item["price_pln"], item["duration_h"],
         ))
         for inbound in inbound_cards[:4]:
+            # Each click changes the return-results page. Reload it before the
+            # next candidate so the label is selected from a clean state and
+            # the saved URL belongs to this exact inbound option.
+            try:
+                _load_cards(page, return_url, returning=True)
+                if not _click_card(page, inbound["_label"]):
+                    continue
+                exact_link = _selected_itinerary_link(page, return_url)
+            except (BrowserBlockedError, BrowserCapacityError):
+                raise
+            except Exception:
+                continue
+            if not exact_link:
+                # A return card without a selected-itinerary URL is not a
+                # purchase-verifiable result. Do not publish it as exact.
+                continue
             airlines = outbound["airline_name"]
             if inbound["airline_name"].lower() not in airlines.lower():
                 airlines += " / " + inbound["airline_name"]
@@ -431,12 +480,13 @@ def fetch_rendered(url, return_date=None):
                 "departure": outbound["departure"],
                 "aircraft": "",
                 "round_trip_verified": True,
+                "purchase_link_verified": True,
                 "outbound_duration_h": outbound["duration_h"],
                 "outbound_stops": outbound["stops"],
                 "return_duration_h": inbound["duration_h"],
                 "return_stops": inbound["stops"],
                 "return_departure": inbound["departure"],
-                "link": return_url,
+                "link": exact_link,
             })
     if not combined:
         if no_return_flights or (return_attempts > 0 and return_parse_failures >= return_attempts):

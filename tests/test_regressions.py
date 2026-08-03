@@ -264,6 +264,20 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertTrue(google_browser._click_card(page, "complete flight label"))
         self.assertTrue(page.candidate.force)
 
+    def test_round_trip_selected_itinerary_does_not_fall_back_to_return_list(self):
+        class Page:
+            url = "https://www.google.com/travel/flights/booking?selected=1"
+            def wait_for_timeout(self, _): pass
+            def locator(self, _):
+                return type("Empty", (), {"count": lambda self: 0})()
+
+        self.assertEqual(
+            google_browser._selected_itinerary_link(
+                Page(), "https://www.google.com/travel/flights/search?return=1"
+            ),
+            "https://www.google.com/travel/flights/booking?selected=1",
+        )
+
     def test_scan_fails_when_every_google_query_has_source_error(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn("successful_google_tasks = 0", source)
@@ -584,10 +598,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_market_price_can_upgrade_non_priority_airline(self):
         flight = {"airline": "AY", "airline_name": "Finnair", "price_pln": 4500, "duration_h": 17.7, "stops": 1}
-        self.assertEqual(scanner.score(flight, {"budget_pln": 5000}), 3)
+        self.assertEqual(scanner.score(flight, {"budget_pln": 5000}), 4)
         self.assertEqual(scanner.score(
             flight, {"budget_pln": 5000}, market_prices=[4500, 6500, 7000, 8200]
         ), 4)
+
+    def test_round_trip_fingerprint_includes_return_leg_identity(self):
+        task = {"origin": "GDN", "dest": "KIX", "date": "2026-10-22", "return_date": "2026-11-06", "trip_type": "round_trip", "cabin": "economy"}
+        first = {"airline": "AY", "departure": "10:00", "duration_h": 18, "return_departure": "09:00", "return_duration_h": 17, "return_stops": 1}
+        second = {**first, "return_departure": "18:00", "return_duration_h": 18}
+        self.assertNotEqual(scanner.offer_fingerprint(task, first), scanner.offer_fingerprint(task, second))
 
     def test_priority_airline_is_not_required_for_high_market_rating(self):
         flight = {"airline": "AY", "airline_name": "Finnair", "price_pln": 3500, "duration_h": 14, "stops": 1}
@@ -773,6 +793,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertTrue(rss.fresh(recent))
         self.assertFalse(rss.fresh(old))
         self.assertFalse(rss.fresh("Tue, 28 Jul 2030 10:00:00 +0000"))
+
+    def test_rss_source_failure_is_recorded_for_scan_status(self):
+        rss.FEED_STATUS.clear()
+        with patch.object(rss.urllib.request, "urlopen", side_effect=OSError("feed offline")):
+            self.assertEqual(rss.items({"name": "Test feed", "url": "https://example.com/rss"}), [])
+        self.assertFalse(rss.FEED_STATUS["Test feed"]["ok"])
+        self.assertIn("feed offline", rss.FEED_STATUS["Test feed"]["error"])
 
     def test_rss_keeps_detected_first_class_for_multi_cabin_monitor(self):
         monitor = {
@@ -1109,6 +1136,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("drop policy if exists profiles_self_update", migration)
         self.assertIn("using (id = auth.uid())", migration)
 
+    def test_final_audit_hardening_closes_boolean_side_channels(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260803000100_final_audit_hardening.sql").read_text()
+        self.assertIn("candidate_id = auth.uid()", migration)
+        self.assertIn("and m.user_id = auth.uid()", migration)
+        self.assertIn("offer_price_history_for_user", migration)
+        self.assertIn("grant execute on function public.offer_price_history_for_user(uuid[]) to authenticated", migration)
+
     def test_site_and_database_changes_are_tested_before_deploy(self):
         checks = (ROOT / ".github" / "workflows" / "checks.yml").read_text()
         pages = (ROOT / ".github" / "workflows" / "pages.yml").read_text()
@@ -1300,8 +1334,26 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260803-16', html)
-        self.assertIn('styles.css?v=20260803-10', html)
+        self.assertIn('app.js?v=20260803-17', html)
+        self.assertIn('styles.css?v=20260803-11', html)
+
+    def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn('rpc("offer_price_history_for_user"', app)
+        self.assertIn("at most 12 rows per offer", app)
+        migration = (ROOT / "supabase" / "migrations" / "20260803000100_final_audit_hardening.sql").read_text()
+        self.assertIn("offer_price_history_for_user", migration)
+        self.assertIn("row_number <= 12", migration)
+
+    def test_frontend_handles_invalid_invite_and_friendly_scan_statuses(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn("Link zaproszenia jest nieprawidłowy", app)
+        self.assertIn("SCAN_STATUS_LABELS", app)
+        self.assertIn("Pokaż szczegóły techniczne", app)
+
+    def test_frontend_has_frame_escape_guard(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn("window.top !== window.self", app)
 
     def test_frontend_date_picker_has_forward_only_constraints(self):
         app = (ROOT / "site" / "app.js").read_text()

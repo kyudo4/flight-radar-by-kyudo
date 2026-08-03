@@ -1,4 +1,12 @@
 (() => {
+  try {
+    if (window.top !== window.self) {
+      document.documentElement.innerHTML = '<body><main><section class="panel"><h1>Otwórz Flight Radar w osobnej karcie</h1><p>Ta aplikacja nie działa wewnątrz osadzonego okna.</p></section></main></body>';
+      return;
+    }
+  } catch (_error) {
+    return;
+  }
   const cfg = window.ASIA_RADAR_CONFIG || {};
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[c]));
@@ -149,7 +157,9 @@
     if (new URLSearchParams(location.search).get("invite")) {
       const token = new URLSearchParams(location.search).get("invite");
       const claimed = await client.rpc("claim_invite", { invite_token: token });
-      if (claimed.data) { history.replaceState({}, "", location.pathname); profile.status = "active"; }
+      history.replaceState({}, "", location.pathname);
+      if (claimed.error || claimed.data !== true) profile.invite_error = "Link zaproszenia jest nieprawidłowy, wygasł albo został już wykorzystany.";
+      else { profile.status = "active"; delete profile.invite_error; }
     }
     if (profile.status !== "active") { show("appTabs", false); show("adminTab", false); show("adminView", false); showAppTab("radar"); renderBlocked(); return; }
     show("appTabs");
@@ -175,7 +185,8 @@
 
   function renderBlocked() {
     const suspended = profile?.status === "suspended";
-    $("statusStrip").innerHTML = `<strong>${suspended ? "⛔ Konto zawieszone" : "⏳ Konto oczekuje na aktywację"}</strong><span>${suspended ? "Skontaktuj się z administratorem." : "Poproś administratora o zaproszenie lub sprawdź, czy użyłeś właściwego linku."}</span>`;
+    const inviteError = profile?.invite_error ? `<span class="status-suspended">${esc(profile.invite_error)}</span>` : "";
+    $("statusStrip").innerHTML = `<strong>${suspended ? "⛔ Konto zawieszone" : "⏳ Konto oczekuje na aktywację"}</strong><span>${suspended ? "Skontaktuj się z administratorem." : "Poproś administratora o zaproszenie lub sprawdź, czy użyłeś właściwego linku."}</span>${inviteError}`;
     $("monitorList").innerHTML = `<div class="empty">${suspended ? "Dostęp do aplikacji jest obecnie wyłączony." : "Konto nie jest jeszcze aktywne."}</div>`; $("offerList").innerHTML = "";
   }
 
@@ -371,7 +382,11 @@
         }
       }
       if (offerIds.length) {
-        const { data: historyRows, error: historyError } = await client.from("offer_price_history").select("offer_id,price_pln,observed_at").in("offer_id", offerIds).order("observed_at", { ascending: false }).limit(480);
+        let { data: historyRows, error: historyError } = await client.rpc("offer_price_history_for_user", { p_offer_ids: offerIds });
+        // Compatibility fallback while the additive database migration is
+        // rolling out. The RPC keeps at most 12 rows per offer, unlike the
+        // old global limit which favored the most frequently changing fares.
+        if (historyError) ({ data: historyRows, error: historyError } = await client.from("offer_price_history").select("offer_id,price_pln,observed_at").in("offer_id", offerIds).order("observed_at", { ascending: false }).limit(480));
         if (!historyError) for (const row of historyRows || []) (priceHistory[row.offer_id] ||= []).push(row);
       }
       const byId = new Map(offerRows.map(offer => [offer.id, offer]));
@@ -487,7 +502,11 @@
     $("scanNowButton").onclick = requestImmediateScan;
     await loadScanStatus();
   }
-  async function loadScanStatus() { const { data, error } = await client.from("scan_runs").select("id,started_at,finished_at,query_count,standard_limit,first_limit,blocked,offer_count,status,error").order("started_at", { ascending: false }).limit(8); if (error) { $("scanStatus").textContent = "Brak danych o skanach."; return null; } const rows = data || [], latest = rows[0]; $("scanStatus").innerHTML = latest ? `<strong>Ostatni skan: ${esc(latest.status)}</strong> · ${esc(dateTimeFmt(latest.started_at))} · zapytań: ${latest.query_count || 0} · ofert: ${latest.offer_count || 0}${latest.error ? `<br><span class="status-suspended">${esc(latest.error)}</span>` : ""}` : "Brak uruchomionych skanów."; $("scanHistory").innerHTML = rows.length ? `<h3>Historia skanów</h3>${rows.map(row => `<div class="scan-row"><span class="status-${row.status === "ok" ? "active" : "suspended"}">${esc(row.status)}</span><span>${esc(dateTimeFmt(row.started_at))}</span><span>${row.query_count || 0} zapytań · ${row.offer_count || 0} ofert</span></div>`).join("")}` : ""; return latest; }
+  const SCAN_STATUS_LABELS = { queued: "W kolejce", running: "W toku", ok: "OK", partial: "Częściowy", blocked: "Zablokowany", error: "Błąd" };
+  const scanStatusLabel = value => SCAN_STATUS_LABELS[String(value || "")] || "Nieznany";
+  const scanStatusClass = value => value === "ok" ? "active" : value === "running" || value === "queued" ? "pending" : "suspended";
+  const scanErrorDetails = value => value ? `<details class="scan-error-details"><summary>Pokaż szczegóły techniczne</summary><div>${esc(value)}</div></details>` : "";
+  async function loadScanStatus() { const { data, error } = await client.from("scan_runs").select("id,started_at,finished_at,query_count,standard_limit,first_limit,blocked,offer_count,status,error").order("started_at", { ascending: false }).limit(8); if (error) { $("scanStatus").textContent = "Brak danych o skanach."; return null; } const rows = data || [], latest = rows[0]; $("scanStatus").innerHTML = latest ? `<strong>Ostatni skan: ${esc(scanStatusLabel(latest.status))}</strong> · ${esc(dateTimeFmt(latest.started_at))} · zapytań: ${latest.query_count || 0} · ofert: ${latest.offer_count || 0}${scanErrorDetails(latest.error)}` : "Brak uruchomionych skanów."; $("scanHistory").innerHTML = rows.length ? `<h3>Historia skanów</h3>${rows.map(row => `<div class="scan-row"><span class="status-${scanStatusClass(row.status)}">${esc(scanStatusLabel(row.status))}</span><span>${esc(dateTimeFmt(row.started_at))}</span><span>${row.query_count || 0} zapytań · ${row.offer_count || 0} ofert</span>${scanErrorDetails(row.error)}</div>`).join("")}` : ""; return latest; }
   async function requestImmediateScan() {
     const button = $("scanNowButton"), output = $("scanNowMessage");
     button.disabled = true; output.textContent = "Uruchamianie skanu…"; output.className = "message";

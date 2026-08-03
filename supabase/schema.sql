@@ -267,11 +267,13 @@ returns boolean language sql stable security definer set search_path = public as
   );
 $$;
 
-create or replace function public.is_active_user(user_id uuid default auth.uid())
+create or replace function public.is_active_user(candidate_id uuid default auth.uid())
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from public.profiles
-    where id = user_id and status = 'active'
+    where id = candidate_id
+      and status = 'active'
+      and candidate_id = auth.uid()
   );
 $$;
 
@@ -283,9 +285,31 @@ returns boolean language sql stable security definer set search_path = public as
     join public.monitors monitor on monitor.id = m.monitor_id
     join public.flight_offers offer on offer.id = m.offer_id
     where m.id = p_match_id
+      and m.user_id = auth.uid()
       and offer.price_pln is not null
       and offer.price_pln <= coalesce((monitor.filters ->> 'budget_pln')::numeric, 0)
   );
+$$;
+
+create or replace function public.offer_price_history_for_user(p_offer_ids uuid[])
+returns table(offer_id uuid, price_pln integer, observed_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select ranked.offer_id, ranked.price_pln, ranked.observed_at
+  from (
+    select history.offer_id, history.price_pln, history.observed_at,
+           row_number() over (
+             partition by history.offer_id
+             order by history.observed_at desc, history.id desc
+           ) as row_number
+    from public.offer_price_history history
+    where history.offer_id = any(coalesce(p_offer_ids, '{}'::uuid[]))
+      and exists (
+        select 1 from public.user_matches match
+        where match.offer_id = history.offer_id and match.user_id = auth.uid()
+      )
+  ) ranked
+  where ranked.row_number <= 12
+  order by ranked.observed_at desc;
 $$;
 
 create or replace function public.can_read_flight_offer(p_offer_id uuid)
@@ -794,6 +818,7 @@ revoke execute on function public.sync_telegram_connection(text, text) from anon
 grant execute on function public.is_admin() to authenticated;
 grant execute on function public.is_active_user(uuid) to authenticated;
 grant execute on function public.match_within_monitor_budget(uuid) to authenticated;
+grant execute on function public.offer_price_history_for_user(uuid[]) to authenticated;
 grant execute on function public.can_read_flight_offer(uuid) to authenticated;
 grant execute on function public.claim_invite(text) to authenticated;
 grant execute on function public.create_invite(text, text) to authenticated;
