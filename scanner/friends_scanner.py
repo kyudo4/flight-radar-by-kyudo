@@ -49,6 +49,9 @@ STALE_AFTER_HOURS = 24
 PRICE_HISTORY_LAST = {}
 STALE_SCHEMA_SUPPORTED = None
 PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
+ASIA_DESTINATION_CODES = frozenset({
+    "BKK", "SIN", "KUL", "HKG", "HAN", "SGN", "HND", "NRT", "KIX", "ICN",
+})
 AIRPORTS_FILE = Path(__file__).resolve().parents[1] / "site" / "airports.json"
 AIRPORT_NAME_OVERRIDES = {
     "GDN": "Gdańsk", "WAW": "Warszawa", "POZ": "Poznań", "OSL": "Oslo",
@@ -744,6 +747,41 @@ def market_price_stars(price, market_prices):
     return 1
 
 
+def sparse_asia_economy_exceptional(flight, budget, destination, cabin):
+    """Recognize a genuinely strong Asia Economy fare without a benchmark.
+
+    Google sometimes returns only one comparable card. In that case the
+    market-median score intentionally stays conservative, but a fare at or
+    below 4,500 PLN with a short, one-stop itinerary is still a meaningful
+    top-tier signal for the monitored Asia routes.
+    """
+    if str(cabin or "").lower().replace("_", "-") != "economy":
+        return False
+    if str(destination or "").strip().upper() not in ASIA_DESTINATION_CODES:
+        return False
+    try:
+        price = float(flight.get("price_pln") or 0)
+        budget_limit = float(budget) * 0.90
+    except (TypeError, ValueError):
+        return False
+    if price <= 0 or price > min(4500, budget_limit):
+        return False
+    durations = [
+        flight.get("duration_h"),
+        flight.get("outbound_duration_h"),
+        flight.get("return_duration_h"),
+    ]
+    try:
+        if any(float(value) > 18.5 for value in durations if value is not None):
+            return False
+        stops = [flight.get("stops"), flight.get("outbound_stops"), flight.get("return_stops")]
+        if any(int(value) > 1 for value in stops if value is not None):
+            return False
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def score(flight, filters, feedback=None, preferences=None, route="", destination="", cabin="", market_prices=None):
     price = flight.get("price_pln") or 999999
     budget = int(filters.get("budget_pln") or 999999)
@@ -761,6 +799,8 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
         # offer could be hidden by a 4/5-star Telegram threshold.
         stars = 5 if price <= budget * .55 else 4 if price <= budget * .90 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
         priority_airline = flight.get("airline") in PRIORITY
+        if sparse_asia_economy_exceptional(flight, budget, destination, cabin):
+            stars = 5
     preferred = {str(value).strip().upper() for value in filters.get("preferred_airlines", []) if str(value).strip()}
     airline_code = str(flight.get("airline") or "").strip().upper()
     airline_name = str(flight.get("airline_name") or "").strip().upper()

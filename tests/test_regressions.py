@@ -639,6 +639,24 @@ class FlightRadarRegressionTests(unittest.TestCase):
             flight, {"budget_pln": 5000}, market_prices=[4500, 6500, 7000, 8200]
         ), 4)
 
+    def test_sparse_short_asia_economy_fare_gets_top_rating(self):
+        flight = {
+            "airline": "AY", "airline_name": "Finnair", "price_pln": 4500,
+            "duration_h": 17.67, "stops": 1,
+        }
+        self.assertEqual(scanner.score(
+            flight, {"budget_pln": 5000}, destination="KIX", cabin="ECONOMY"
+        ), 5)
+
+    def test_sparse_asia_exception_does_not_ignore_long_or_multi_stop_itineraries(self):
+        flight = {
+            "airline": "AY", "airline_name": "Finnair", "price_pln": 4500,
+            "duration_h": 19, "stops": 2,
+        }
+        self.assertEqual(scanner.score(
+            flight, {"budget_pln": 5000}, destination="KIX", cabin="ECONOMY"
+        ), 4)
+
     def test_round_trip_fingerprint_includes_return_leg_identity(self):
         task = {"origin": "GDN", "dest": "KIX", "date": "2026-10-22", "return_date": "2026-11-06", "trip_type": "round_trip", "cabin": "economy"}
         first = {"airline": "AY", "departure": "10:00", "duration_h": 18, "return_departure": "09:00", "return_duration_h": 17, "return_stops": 1}
