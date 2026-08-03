@@ -1,7 +1,7 @@
 -- Final audit hardening: close boolean side channels and return bounded,
 -- owner-scoped price history without a global per-page limit.
 
-create or replace function public.is_active_user(candidate_id uuid default auth.uid())
+create or replace function public.is_active_user(candidate uuid default auth.uid())
 returns boolean
 language sql
 stable
@@ -11,9 +11,9 @@ as $$
   select exists (
     select 1
     from public.profiles
-    where id = candidate_id
+    where id = candidate
       and status = 'active'
-      and candidate_id = auth.uid()
+      and candidate = auth.uid()
   );
 $$;
 
