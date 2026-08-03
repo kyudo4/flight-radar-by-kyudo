@@ -1143,13 +1143,18 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("runtime_limit_reached", source)
         self.assertIn("timeout-minutes: 60", workflow)
         self.assertIn('MAX_SCAN_RUNTIME_SECONDS: "3000"', workflow)
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("aż do 400 + 40", readme)
 
     def test_telegram_feedback_has_fast_separate_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "telegram-feedback.yml").read_text()
+        readme = (ROOT / "README.md").read_text()
         deployment = (ROOT / ".github" / "workflows" / "supabase-functions.yml").read_text()
         webhook = (ROOT / "supabase" / "functions" / "telegram-feedback-webhook" / "index.ts").read_text()
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn('cron: "23 * * * *"', workflow)
+        self.assertIn("cogodzinny health-check", readme)
+        self.assertIn("natychmiast przez webhook", readme)
         self.assertIn('group: friends-telegram-feedback', workflow)
         self.assertNotIn('group: friends-backend', workflow)
         self.assertIn("python scanner/telegram_feedback.py", workflow)

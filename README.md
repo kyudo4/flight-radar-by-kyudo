@@ -13,7 +13,7 @@ jej stanu, tokenów Telegrama ani historii alertów.
   dla podróży tam i z powrotem — pary wylot/powrót;
 - `scanner/` — skaner Python uruchamiany przez GitHub Actions;
 - `.github/workflows/scan.yml` — wspólny skan 4 razy na dobę (co 6 godzin);
-- `.github/workflows/telegram-feedback.yml` — odbiór reakcji z Telegrama co 5 minut;
+- `.github/workflows/telegram-feedback.yml` — cogodzinny health-check i awaryjny odbiór reakcji z Telegrama;
 - Google Flights — wspólny kolektor z kontrolowanym limitem zapytań i retry dla przejściowych błędów;
 - RSS źródeł promocyjnych — Secret Flying, Fly4Free, LoyaltyLobby, OMAAT, Travel Dealz, View From The Wing, FlyerTalk i Reddit;
 - Telegram Login — jedyne logowanie i jednocześnie kanał alertów. Panel korzysta
@@ -53,8 +53,9 @@ jej stanu, tokenów Telegrama ani historii alertów.
    `public.profiles` i wykonaj `supabase/bootstrap-admin.sql` po jego wpisaniu.
 7. Włącz GitHub Pages przez workflow `Publish Flight Radar by Kyudo dashboard`.
 8. Włącz workflow `Flight Radar by Kyudo scan`.
-9. Workflow `Flight Radar Telegram feedback` odbiera reakcje z przycisków maksymalnie
-   po około 5 minutach. `Flight Radar Telegram smoke test` służy wyłącznie do ręcznego
+9. Reakcje z przycisków Telegrama są odbierane natychmiast przez webhook; workflow
+   `Flight Radar Telegram feedback` wykonuje cogodzinny health-check i uruchamia polling
+   tylko wtedy, gdy webhook nie jest ustawiony. `Flight Radar Telegram smoke test` służy wyłącznie do ręcznego
    sprawdzenia dostarczenia wiadomości administratorowi.
 10. Workflow `Flight Radar retention cleanup` uruchamia cotygodniowe sprzątanie historii
     cen, wygasłych monitorów, starych skanów i zaproszeń.
@@ -134,7 +135,7 @@ Kolejka jest stronicowana,
 więc duża liczba monitorów nie ucina jej po pierwszych 20 000 rekordów.
 
 Po trzech zdrowych przebiegach limit automatycznie rośnie o 40 standardowych i 2 First,
-aż do 400 + 24. Po pierwszym 403/429/503, CAPTCHA albo consent wall bieżący przebieg
+aż do 400 + 40. Po pierwszym 403/429/503, CAPTCHA albo consent wall bieżący przebieg
 kończy się natychmiast, a kolejny schodzi co najmniej o połowę (nie ma bezmyślnego
 ponawiania zablokowanego żądania). Historia limitów i blokad jest zapisana w `scan_runs`.
 Opóźnienie między zapytaniami pozostaje włączone. Wartości można zmienić przez
