@@ -1434,11 +1434,10 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_migrations_have_an_automatic_deployment_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
-        script = (ROOT / "scripts" / "apply_supabase_audit_migrations.py").read_text()
         self.assertIn('"supabase/migrations/**"', workflow)
         self.assertIn("SUPABASE_ACCESS_TOKEN", workflow)
-        self.assertIn("database/query", script)
-        self.assertIn("schema_migrations", script)
+        self.assertIn("SUPABASE_DB_PASSWORD", workflow)
+        self.assertIn("supabase db push", workflow)
 
     def test_frontend_handles_invalid_invite_and_friendly_scan_statuses(self):
         app = (ROOT / "site" / "app.js").read_text()
