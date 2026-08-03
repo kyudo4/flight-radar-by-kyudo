@@ -1195,7 +1195,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_final_audit_hardening_closes_boolean_side_channels(self):
         migration = (ROOT / "supabase" / "migrations" / "20260803000100_final_audit_hardening.sql").read_text()
-        self.assertIn("and $1 = auth.uid()", migration)
+        self.assertIn("user_id = auth.uid()", migration)
         self.assertIn("and m.user_id = auth.uid()", migration)
         self.assertIn("offer_price_history_for_user", migration)
         self.assertIn("grant execute on function public.offer_price_history_for_user(uuid[]) to authenticated", migration)

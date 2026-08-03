@@ -275,13 +275,13 @@ returns boolean language sql stable security definer set search_path = public as
   );
 $$;
 
-create or replace function public.is_active_user(candidate uuid default auth.uid())
+create or replace function public.is_active_user(user_id uuid default auth.uid())
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from public.profiles
-    where id = candidate
+    where id = user_id
       and status = 'active'
-      and candidate = auth.uid()
+      and user_id = auth.uid()
   );
 $$;
 

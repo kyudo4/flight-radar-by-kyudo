@@ -1,9 +1,7 @@
 -- Final audit hardening: close boolean side channels and return bounded,
 -- owner-scoped price history without a global per-page limit.
 
--- Leave the existing input parameter name untouched. Production may have
--- either the legacy name `user_id` or the canonical name `candidate`.
-create or replace function public.is_active_user(uuid default auth.uid())
+create or replace function public.is_active_user(user_id uuid default auth.uid())
 returns boolean
 language sql
 stable
@@ -13,9 +11,9 @@ as $$
   select exists (
     select 1
     from public.profiles
-    where id = $1
+    where id = user_id
       and status = 'active'
-      and $1 = auth.uid()
+      and user_id = auth.uid()
   );
 $$;
 
