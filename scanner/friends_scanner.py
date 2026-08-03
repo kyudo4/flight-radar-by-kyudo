@@ -185,12 +185,27 @@ def monitor_combination_count(filters):
                   else [filters.get("cabin") or "BUSINESS"])
         cabin_count = len({str(value).upper() for value in cabins if value})
         if trip_type(filters) == "round_trip":
-            return (len(origins) * len(destinations) * departure_days *
-                    ((parse_date(filters["return_to"]) - parse_date(filters["return_from"])).days + 1) *
-                    max(1, cabin_count))
+            return (len(origins) * len(destinations) *
+                    valid_round_trip_pair_count(filters) * max(1, cabin_count))
         return len(origins) * len(destinations) * departure_days * max(1, cabin_count)
     except (KeyError, TypeError, ValueError):
         return 0
+
+
+def valid_round_trip_pair_count(filters):
+    """Count only return dates that are after their outbound date."""
+    departure_start = parse_date(filters["from"])
+    departure_end = parse_date(filters["to"])
+    return_start = parse_date(filters["return_from"])
+    return_end = parse_date(filters["return_to"])
+    total = 0
+    departure = departure_start
+    while departure <= departure_end:
+        first_valid_return = max(return_start, departure + timedelta(days=1))
+        if first_valid_return <= return_end:
+            total += (return_end - first_valid_return).days + 1
+        departure += timedelta(days=1)
+    return total
 
 
 def monitor_combinations(monitor):
@@ -531,13 +546,19 @@ def task_key(task):
 
 
 def offer_fingerprint(task, flight):
-    raw = "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % (
+    # Version the identity so old rows are not silently merged with the
+    # corrected identity after adding the outbound leg details.
+    raw = "|".join(str(value) for value in (
+        "v2",
         task["origin"], task["dest"], task["date"], task.get("return_date") or "",
         task.get("trip_type") or ("round_trip" if task.get("return_date") else "one_way"),
         task["cabin"], flight.get("airline", ""), flight.get("departure", ""),
-        flight.get("duration_h", ""), flight.get("return_departure", ""),
-        flight.get("return_duration_h", ""), flight.get("return_stops", ""),
-    )
+        flight.get("duration_h", ""), flight.get("stops", ""),
+        flight.get("outbound_duration_h", ""), flight.get("outbound_stops", ""),
+        flight.get("return_departure", ""), flight.get("return_duration_h", ""),
+        flight.get("return_stops", ""), flight.get("aircraft", ""),
+        flight.get("flight_numbers", ""), flight.get("segments", ""),
+    ))
     return hashlib.sha1(raw.encode()).hexdigest()
 
 
@@ -555,6 +576,9 @@ def quality(flight, filters):
     if trip == "round_trip" and not flight.get("round_trip_verified", False):
         # A round-trip result without a confirmed inbound leg cannot be
         # proven to satisfy the same time/stop rules in both directions.
+        return False
+    if trip == "round_trip" and flight.get("purchase_link_verified") is not True:
+        # A generic Google search URL is not sufficient for a two-way alert.
         return False
     raw_max_duration = filters.get("max_duration_h")
     if raw_max_duration in (None, ""):
@@ -729,20 +753,21 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
         # that fits the user's budget can still be a poor deal for this route.
         stars = market_price_stars(price, market_prices)
         ratio = float(price) / reference
-        if flight.get("airline") in PRIORITY and ratio <= 0.90:
-            stars = min(5, stars + 1)
+        priority_airline = flight.get("airline") in PRIORITY and ratio <= 0.90
     else:
         # A sparse route still needs a useful first-pass rating.  A fare at
         # least 10% below the user's hard ceiling is interesting even when
         # Google returned fewer than three comparable cards; otherwise a good
         # offer could be hidden by a 4/5-star Telegram threshold.
         stars = 5 if price <= budget * .55 else 4 if price <= budget * .90 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
-        if flight.get("airline") in PRIORITY:
-            stars = min(5, stars + 1)
+        priority_airline = flight.get("airline") in PRIORITY
     preferred = {str(value).strip().upper() for value in filters.get("preferred_airlines", []) if str(value).strip()}
     airline_code = str(flight.get("airline") or "").strip().upper()
     airline_name = str(flight.get("airline_name") or "").strip().upper()
-    if preferred and any(value == airline_code or value in airline_name for value in preferred):
+    preferred_match = preferred and any(value == airline_code or value in airline_name for value in preferred)
+    if priority_airline or preferred_match:
+        # Priority and preferred status are one airline-quality signal, not
+        # two independent bonuses.
         stars = min(5, stars + 1)
     scored_durations = [
         flight.get("duration_h"),
@@ -763,7 +788,7 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
 def fetch_existing(monitor_id):
     return fetch_all_rows("user_matches", {
         "monitor_id": "eq." + monitor_id,
-        "select": "id,offer_id,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(fingerprint,route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln)",
+        "select": "id,offer_id,visible,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(fingerprint,route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln)",
         "order": "updated_at.asc,id.asc",
     })
 
@@ -791,7 +816,10 @@ def fetch_preferences(user_id):
 def save_offer(task, flight):
     trip_type_value = task.get("trip_type") or ("round_trip" if task.get("return_date") else "one_way")
     tags = list(flight.get("tags") or [])
-    verified = trip_type_value == "one_way" or bool(flight.get("round_trip_verified", False))
+    verified = trip_type_value == "one_way" or (
+        bool(flight.get("round_trip_verified", False))
+        and flight.get("purchase_link_verified") is True
+    )
     if trip_type_value == "round_trip" and not verified and "Powrót do potwierdzenia" not in tags:
         tags.append("Powrót do potwierdzenia")
     verification_status = "verified" if verified else "pending_return"
@@ -947,16 +975,21 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
         return 0, 0
     if previous is None:
         previous = fetch_existing(monitor["id"])
+    active_previous = [old for old in previous if old.get("visible", True)]
     route = "%s → %s" % (task["origin"], task["dest"])
     cabin = str(task.get("cabin") or "").upper().replace("-", "_")
     return_date = task.get("return_date")
     trip_type_value = task.get("trip_type") or ("round_trip" if return_date else "one_way")
+    if trip_type_value == "round_trip" and flight.get("purchase_link_verified") is not True:
+        # Do not store or alert a round-trip result that only came from the
+        # generic Google search page.
+        return 0, 0
     airline = airline_identity(flight)
     previous_prices = []
     route_prices = list(market_prices or [])
     matching_feedback = []
     route_airlines = set()
-    for old in previous if airline else []:
+    for old in active_previous if airline else []:
         old_offer = old.get("flight_offers") or {}
         old_airline = airline_identity(old_offer)
         old_cabin = str(old_offer.get("cabin") or "").upper().replace("-", "_")
@@ -980,11 +1013,11 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
             for value in (old_offer.get("price_pln"), old.get("min_price_for_user")):
                 if value is not None:
                     previous_prices.append(int(value))
-    if historical_duplicate(previous, route, cabin, airline, task["date"], flight.get("price_pln"), return_date=return_date, trip_type_value=trip_type_value):
+    if historical_duplicate(active_previous, route, cabin, airline, task["date"], flight.get("price_pln"), return_date=return_date, trip_type_value=trip_type_value):
         # Nowy dzień tej samej trasy i linii nie jest nową okazją, jeśli kosztuje tyle samo lub więcej.
         return 0, 0
     offer = save_offer(task, flight)
-    row = next((x for x in previous if x["offer_id"] == offer["id"]), None)
+    row = next((x for x in active_previous if x["offer_id"] == offer["id"]), None)
     current_price = flight.get("price_pln")
     previous_min = min(previous_prices) if previous_prices else None
     prices = previous_prices + ([current_price] if current_price is not None else [])
@@ -999,9 +1032,10 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     is_new_low = bool(current_price is not None and (previous_min is None or current_price < previous_min))
     is_new_airline = bool(airline and airline not in route_airlines)
     round_trip_verified = "Powrót do potwierdzenia" not in (offer.get("tags") or [])
-    if trip_type_value == "round_trip" and flight.get("purchase_link_verified") is False:
+    if trip_type_value == "round_trip" and flight.get("purchase_link_verified") is not True:
         round_trip_verified = False
     match = {"user_id": monitor["user_id"], "monitor_id": monitor["id"], "offer_id": offer["id"], "stars": stars,
+             "visible": True,
              "telegram_eligible": round_trip_verified and (is_new_low or is_new_airline) and stars >= int(rules.get("min_stars") or 4),
              "new_airline": is_new_airline,
              "min_price_for_user": min(prices) if prices else None}
@@ -1231,6 +1265,8 @@ def main():
             raise ScanBlockedRun("Google zablokował skan; kolejny przebieg pozostaje na bezpiecznym limicie")
         if source_degraded or source_unavailable:
             raise ScanSourceRun("Google zmienił lub zwrócił uszkodzoną strukturę danych; skan został bezpiecznie zatrzymany")
+        if final_status == "partial":
+            raise ScanSourceRun("Skan częściowy; część zapytań lub zapisów nie zakończyła się poprawnie")
     except ScanBlockedRun:
         raise
     except ScanSourceRun:

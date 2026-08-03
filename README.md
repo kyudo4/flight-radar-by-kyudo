@@ -30,7 +30,7 @@ jej stanu, tokenów Telegrama ani historii alertów.
    `20260802000500_round_trip_retention_telegram.sql` oraz
    `20260802000600_durable_preferences.sql` i
    `20260802000700_preference_integrity.sql` i
-   `20260802000800_atomic_scan_queue.sql`.
+   `20260802000800_atomic_scan_queue.sql` oraz najnowsze migracje audytowe.
 2. W BotFather > Bot Settings > Web Login dodaj domenę panelu jako Allowed Origin
    i pozostaw Client ID/Secret dla tego samego bota.
 3. W Supabase Edge Functions utwórz funkcję `telegram-auth` z pliku
@@ -48,7 +48,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
    najnowszej migracji funkcja ma kompatybilny tryb przejściowy.
 4. Ustaw adres projektu i anon key w `site/config.js` na podstawie `site/config.example.js`.
 5. Ustaw sekrety GitHub Actions: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `SUPABASE_ANON_KEY` i `TG_BOT_TOKEN`.
+   `SUPABASE_ANON_KEY`, `TG_BOT_TOKEN`, a dla automatycznych migracji również
+   `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF` i `SUPABASE_DB_PASSWORD`.
 6. Zaloguj się pierwszy raz przez Telegram, odczytaj `telegram_user_id` z
    `public.profiles` i wykonaj `supabase/bootstrap-admin.sql` po jego wpisaniu.
 7. Włącz GitHub Pages przez workflow `Publish Flight Radar by Kyudo dashboard`.
@@ -60,9 +61,12 @@ jej stanu, tokenów Telegrama ani historii alertów.
 10. Workflow `Flight Radar retention cleanup` uruchamia cotygodniowe sprzątanie historii
     cen, wygasłych monitorów, starych skanów i zaproszeń.
 11. Workflow `Deploy Flight Radar Supabase functions` publikuje zmiany funkcji
-    `telegram-auth` i `admin-scan`. W GitHub Secrets muszą być ustawione
-    `SUPABASE_ACCESS_TOKEN` oraz `SUPABASE_PROJECT_REF`; bez nich zmiana funkcji
-    nie powinna być uznana za wdrożoną.
+   `telegram-auth` i `admin-scan`. W GitHub Secrets muszą być ustawione
+   `SUPABASE_ACCESS_TOKEN` oraz `SUPABASE_PROJECT_REF`; bez nich zmiana funkcji
+   nie powinna być uznana za wdrożoną.
+12. Workflow `Apply Flight Radar Supabase migrations` wykonuje oczekujące migracje
+    przed użyciem nowych funkcji bazy. Hasło bazy jest używane wyłącznie przez
+    GitHub Actions i nie trafia do kodu ani strony.
 
 Do działania skanera potrzebny jest Python 3.11. Lekki odczyt Google działa przez
 `fast-flights`, a przy przeniesieniu danych do JavaScript automatycznie uruchamiany

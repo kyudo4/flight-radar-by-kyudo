@@ -278,6 +278,20 @@ class FlightRadarRegressionTests(unittest.TestCase):
             "https://www.google.com/travel/flights/booking?selected=1",
         )
 
+    def test_round_trip_picker_rejects_a_changed_search_url_as_purchase_link(self):
+        class Page:
+            url = "https://www.google.com/travel/flights/search?return=changed"
+            def wait_for_timeout(self, _): pass
+            def locator(self, selector):
+                return type("Empty", (), {"count": lambda self: 0})()
+
+        self.assertEqual(
+            google_browser._selected_itinerary_link(
+                Page(), "https://www.google.com/travel/flights/search?return=1"
+            ),
+            "",
+        )
+
     def test_scan_fails_when_every_google_query_has_source_error(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn("successful_google_tasks = 0", source)
@@ -410,6 +424,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         payload = [None, None, None, [[[['business', ['Qatar Airways'], segments], [[0, 4500]]]]]]
         html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
         flight = google_parser.parse(html, origin="WAW", destination="NRT", return_date="2026-09-14")[0]
+        flight["purchase_link_verified"] = True
         self.assertTrue(flight["round_trip_verified"])
         self.assertEqual(flight["outbound_duration_h"], 15)
         self.assertEqual(flight["return_duration_h"], 13)
@@ -422,6 +437,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_round_trip_quality_applies_time_and_stops_to_both_legs(self):
         flight = {
             "round_trip_verified": True,
+            "purchase_link_verified": True,
             "outbound_duration_h": 21.5, "return_duration_h": 22,
             "outbound_stops": 1, "return_stops": 1,
         }
@@ -432,6 +448,26 @@ class FlightRadarRegressionTests(unittest.TestCase):
         flight["return_duration_h"] = 22
         flight["return_stops"] = 2
         self.assertFalse(scanner.quality(flight, filters))
+
+    def test_round_trip_quality_requires_exact_purchase_link(self):
+        flight = {
+            "round_trip_verified": True,
+            "outbound_duration_h": 12, "return_duration_h": 12,
+            "outbound_stops": 1, "return_stops": 1,
+        }
+        self.assertFalse(scanner.quality(flight, {
+            "trip_type": "round_trip", "max_duration_h": 22, "max_stops": 1,
+        }))
+
+    def test_round_trip_combination_count_ignores_invalid_return_pairs(self):
+        filters = {
+            "origins": ["WAW"], "destinations": ["NRT"],
+            "from": "2026-09-01", "to": "2026-09-02",
+            "return_from": "2026-09-02", "return_to": "2026-09-03",
+            "trip_type": "round_trip", "cabins": ["BUSINESS"],
+        }
+        self.assertEqual(scanner.valid_round_trip_pair_count(filters), 3)
+        self.assertEqual(scanner.monitor_combination_count(filters), 3)
 
     def test_round_trip_queue_has_a_safe_combination_cap(self):
         monitor = {"id": "large-round-trip", "filters": {
@@ -608,6 +644,21 @@ class FlightRadarRegressionTests(unittest.TestCase):
         first = {"airline": "AY", "departure": "10:00", "duration_h": 18, "return_departure": "09:00", "return_duration_h": 17, "return_stops": 1}
         second = {**first, "return_departure": "18:00", "return_duration_h": 18}
         self.assertNotEqual(scanner.offer_fingerprint(task, first), scanner.offer_fingerprint(task, second))
+
+    def test_offer_fingerprint_includes_outbound_stop_identity(self):
+        task = {"origin": "GDN", "dest": "KIX", "date": "2026-10-22", "cabin": "economy"}
+        direct = {"airline": "AY", "departure": "10:00", "duration_h": 18, "stops": 0}
+        connecting = {**direct, "stops": 1}
+        self.assertNotEqual(scanner.offer_fingerprint(task, direct), scanner.offer_fingerprint(task, connecting))
+
+    def test_priority_and_preferred_airline_share_one_star_bonus(self):
+        flight = {
+            "airline": "QR", "airline_name": "Qatar Airways",
+            "price_pln": 6000, "duration_h": 14, "stops": 1,
+        }
+        self.assertEqual(scanner.score(
+            flight, {"budget_pln": 6000, "preferred_airlines": ["Qatar Airways"]}
+        ), 4)
 
     def test_priority_airline_is_not_required_for_high_market_rating(self):
         flight = {"airline": "AY", "airline_name": "Finnair", "price_pln": 3500, "duration_h": 14, "stops": 1}
@@ -1334,7 +1385,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260803-17', html)
+        self.assertIn('app.js?v=20260803-18', html)
         self.assertIn('styles.css?v=20260803-11', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
@@ -1344,6 +1395,48 @@ class FlightRadarRegressionTests(unittest.TestCase):
         migration = (ROOT / "supabase" / "migrations" / "20260803000100_final_audit_hardening.sql").read_text()
         self.assertIn("offer_price_history_for_user", migration)
         self.assertIn("row_number <= 12", migration)
+
+    def test_latest_migration_invalidates_old_matches_after_filter_edits(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260803000200_monitor_consistency_and_access.sql").read_text()
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        self.assertIn("hide_monitor_matches_on_filter_change", migration)
+        self.assertIn("after update of filters on public.monitors", migration)
+        self.assertIn("set visible = false", migration)
+        self.assertIn("and match.visible", migration)
+        self.assertIn("public.match_within_monitor_budget(match.id)", migration)
+        self.assertIn("hide_monitor_matches_on_filter_change", schema)
+
+    def test_round_trip_server_results_cannot_be_marked_purchase_verified(self):
+        source = (ROOT / "scanner" / "gflights.py").read_text()
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn('"purchase_link_verified": bool(fl.get("purchase_link_verified", False)) if return_date else True', source)
+        self.assertIn('flight.get("purchase_link_verified") is not True', scanner_source)
+
+    def test_telegram_auth_requires_invite_only_for_new_profiles(self):
+        source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn("invite_token", source)
+        self.assertIn("from('invites')", source)
+        self.assertIn("Do pierwszego logowania potrzebujesz ważnego zaproszenia", source)
+        self.assertIn("new URLSearchParams(location.search).get(\"invite\")", app)
+        self.assertNotIn("admin.auth.admin.listUsers", source)
+
+    def test_round_trip_estimate_uses_the_same_pair_formula_on_the_frontend(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn("function validRoundTripPairCount", app)
+        self.assertIn("validRoundTripPairCount(from, to, returnFrom, returnTo)", app)
+        self.assertIn("const pairCount = trip === \"round_trip\"", app)
+
+    def test_partial_scan_is_a_failed_workflow_result(self):
+        source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn('if final_status == "partial":', source)
+        self.assertIn("Skan częściowy; część zapytań", source)
+
+    def test_migrations_have_an_automatic_deployment_workflow(self):
+        workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
+        self.assertIn('"supabase/migrations/**"', workflow)
+        self.assertIn("SUPABASE_DB_PASSWORD", workflow)
+        self.assertIn("supabase db push", workflow)
 
     def test_frontend_handles_invalid_invite_and_friendly_scan_statuses(self):
         app = (ROOT / "site" / "app.js").read_text()

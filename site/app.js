@@ -41,6 +41,18 @@
     return isoDate(date.toISOString().slice(0, 10));
   };
   const todayIso = () => isoDate();
+  function validRoundTripPairCount(from, to, returnFrom, returnTo) {
+    if (!from || !to || !returnFrom || !returnTo || from > to || returnFrom > returnTo) return 0;
+    let total = 0;
+    for (let departure = new Date(`${from}T12:00:00`); departure <= new Date(`${to}T12:00:00`); departure.setDate(departure.getDate() + 1)) {
+      const departureIso = isoDate(departure.toISOString().slice(0, 10));
+      const firstValidReturn = returnFrom > departureIso ? returnFrom : addDays(departureIso, 1);
+      if (firstValidReturn <= returnTo) {
+        total += Math.round((new Date(`${returnTo}T12:00:00`) - new Date(`${firstValidReturn}T12:00:00`)) / 86400000) + 1;
+      }
+    }
+    return total;
+  }
   const airportName = value => AIRPORTS[String(value || "").toUpperCase()] || String(value || "");
   const airportLabel = value => { const code = String(value || "").trim().toUpperCase(); const city = airportName(code); return city && city.toUpperCase() !== code ? `${city} (${code})` : code; };
   const routeName = value => String(value || "").split(/\s*→\s*/).map(airportLabel).join(" → ");
@@ -269,12 +281,7 @@
     if (trip === "round_trip") {
       const returnFrom = $("monitorReturnFrom")?.value, returnTo = $("monitorReturnTo")?.value;
       if (!returnFrom || !returnTo || returnFrom > returnTo) { $("monitorQueryEstimate").textContent = "Wybierz zakres powrotu, aby zobaczyć skalę skanu."; return; }
-      pairs = 0;
-      for (let departure = new Date(`${from}T12:00:00`); departure <= new Date(`${to}T12:00:00`); departure.setDate(departure.getDate() + 1)) {
-        for (let back = new Date(`${returnFrom}T12:00:00`); back <= new Date(`${returnTo}T12:00:00`); back.setDate(back.getDate() + 1)) {
-          if (Math.round((back - departure) / 86400000) >= 1) pairs++;
-        }
-      }
+      pairs = validRoundTripPairCount(from, to, returnFrom, returnTo);
     }
     const total = pairs * origins * destinations * cabins;
     $("monitorQueryEstimate").textContent = total > MAX_MONITOR_COMBINATIONS
@@ -317,7 +324,10 @@
     if (!from || !to || from > to || days > 32) { $("formMessage").textContent = "Zakres dat jest nieprawidłowy (maksymalnie 32 dni)."; return; }
     const returnDays = returnFrom && returnTo ? Math.round((new Date(`${returnTo}T12:00:00`) - new Date(`${returnFrom}T12:00:00`)) / 86400000) + 1 : 0;
     if (trip === "round_trip" && (!returnFrom || !returnTo || returnFrom > returnTo || returnDays > 32 || returnTo <= from)) { $("formMessage").textContent = "Zakres powrotu nie tworzy prawidłowej pary z wylotem."; return; }
-    const combinationUpperBound = (trip === "round_trip" ? days * returnDays : days) * origins.length * destinations.length * cabins.length;
+    const pairCount = trip === "round_trip"
+      ? validRoundTripPairCount(from, to, returnFrom, returnTo)
+      : days;
+    const combinationUpperBound = pairCount * origins.length * destinations.length * cabins.length;
     if (combinationUpperBound > MAX_MONITOR_COMBINATIONS) { $("formMessage").textContent = `Monitor może wygenerować do ${combinationUpperBound.toLocaleString("pl-PL")} kombinacji. Maksymalnie można zapisać ${MAX_MONITOR_COMBINATIONS.toLocaleString("pl-PL")}.`; return; }
     if (!cabins.length || cabins.length > 4 || !budgetRaw || !stopsRaw || !starsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || (durationRaw && (!Number.isFinite(maxDuration) || maxDuration <= 0)) || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isInteger(telegramStars) || telegramStars < 3 || telegramStars > 5 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Wybierz co najmniej jedną klasę i uzupełnij wymagane kryteria. Maksymalny czas możesz pozostawić pusty, aby nie ograniczać długości połączenia."; return; }
     const excludedAirlines = csv($("monitorExcludedAirlines").value);
@@ -336,7 +346,7 @@
       return;
     }
     $("formMessage").textContent = result.error ? result.error.message : "Zapisano.";
-    if (!result.error) { $("monitorDialog").close(); $("monitorForm").reset(); editingMonitorId = null; await loadMonitors(); }
+    if (!result.error) { $("monitorDialog").close(); $("monitorForm").reset(); editingMonitorId = null; await loadMonitors(); await loadOffers(true); }
   }
   async function updateMonitor(id, patch) { const update = patch.status === "active" ? { ...patch, last_scanned_at: null, next_scan_at: new Date().toISOString() } : patch; try { const { error } = await client.from("monitors").update(update).eq("id", id).eq("user_id", user.id); if (error) throw error; await loadMonitors(); } catch (error) { alert(`Nie udało się zmienić monitora: ${error.message || "błąd połączenia"}`); } }
   async function deleteMonitor(id) { if (!confirm("Usunąć ten monitoring?")) return; try { const { error } = await client.from("monitors").delete().eq("id", id).eq("user_id", user.id); if (error) throw error; await loadMonitors(); await loadOffers(true); } catch (error) { alert(`Nie udało się zmienić monitora: ${error.message || "błąd połączenia"}`); } }
@@ -468,10 +478,11 @@
     window.Telegram.Login.auth({ client_id: clientId, scope: ["profile", "write"], lang: "pl" }, async result => {
       try {
         if (!result?.id_token) throw new Error(result?.error || "Logowanie zostało anulowane.");
+        const inviteToken = new URLSearchParams(location.search).get("invite") || "";
         const response = await fetch(`${cfg.supabaseUrl}/functions/v1/telegram-auth`, {
           method: "POST",
           headers: { "Content-Type": "application/json", apikey: cfg.supabaseAnonKey },
-          body: JSON.stringify({ id_token: result.id_token })
+          body: JSON.stringify({ id_token: result.id_token, invite_token: inviteToken })
         });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(body.error || "Nie udało się zweryfikować logowania Telegram.");

@@ -249,19 +249,19 @@ def _selected_itinerary_link(page, previous_url, wait_ms=1200):
     except Exception:
         pass
     current_url = str(getattr(page, "url", "") or "")
-    if current_url and current_url != previous_url:
+    if current_url and current_url != previous_url and "/travel/flights/booking" in current_url:
         return current_url
     selectors = (
         'a[href*="/travel/flights/booking"]',
-        'a[href*="/travel/flights/search"]',
-        'a[href*="google.com/travel/flights"]',
     )
     for selector in selectors:
         try:
             links = page.locator(selector)
             for index in range(min(links.count(), 20)):
                 href = links.nth(index).get_attribute("href") or ""
-                if re.match(r"^https?://", href, re.I) and href != previous_url:
+                if (re.match(r"^https?://", href, re.I)
+                        and "/travel/flights/booking" in href
+                        and href != previous_url):
                     return href
         except Exception:
             continue

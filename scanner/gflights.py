@@ -147,6 +147,9 @@ def _fetch_server(origin, dest, date, seat="business", return_date=None, timeout
             "aircraft": fl.get("aircraft", ""),
             "link": url,
             "round_trip_verified": bool(fl.get("round_trip_verified", not bool(return_date))),
+            # The lightweight response is only a search result. It does not
+            # prove that an exact round-trip itinerary has a booking link.
+            "purchase_link_verified": bool(fl.get("purchase_link_verified", False)) if return_date else True,
             "outbound_duration_h": fl.get("outbound_duration_h"),
             "outbound_stops": fl.get("outbound_stops"),
             "return_duration_h": fl.get("return_duration_h"),

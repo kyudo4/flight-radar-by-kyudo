@@ -24,8 +24,9 @@ Deno.serve(async (request) => {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
 
   try {
-    const { id_token: rawIdToken } = await request.json();
+    const { id_token: rawIdToken, invite_token: rawInviteToken } = await request.json();
     const idToken = typeof rawIdToken === 'string' ? rawIdToken.trim() : '';
+    const inviteToken = typeof rawInviteToken === 'string' ? rawInviteToken.trim() : '';
     if (!idToken || idToken.length > 20000 || idToken.split('.').length !== 3) {
       return json({ error: 'Nieprawidłowy token Telegrama.' }, corsHeaders, 400);
     }
@@ -77,9 +78,45 @@ Deno.serve(async (request) => {
       picture: String(claims.picture ?? '').trim()
     };
 
-    const listed = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    if (listed.error) throw listed.error;
-    const existing = listed.data.users.find((candidate) => candidate.email === email);
+    const existingProfile = await admin.from('profiles')
+      .select('id,status')
+      .eq('telegram_user_id', telegramId)
+      .maybeSingle();
+    if (existingProfile.error) throw existingProfile.error;
+
+    let existing = null;
+    if (existingProfile.data?.id) {
+      const fetched = await admin.auth.admin.getUserById(existingProfile.data.id);
+      if (fetched.error) throw fetched.error;
+      existing = fetched.data.user;
+    }
+
+    // Existing users can return without an invite. New accounts must prove
+    // possession of an unclaimed invite before an auth/profile row is created.
+    if (!existing) {
+      if (!inviteToken || inviteToken.length > 512) {
+        return json({ error: 'Do pierwszego logowania potrzebujesz ważnego zaproszenia.' }, corsHeaders, 403);
+      }
+      const inviteDigest = await crypto.subtle.digest(
+        'SHA-256',
+        new TextEncoder().encode(inviteToken)
+      );
+      const inviteHash = Array.from(new Uint8Array(inviteDigest))
+        .map((value) => value.toString(16).padStart(2, '0')).join('');
+      const invite = await admin.from('invites')
+        .select('id,email,expires_at,claimed_at,revoked_at')
+        .eq('token_hash', inviteHash)
+        .maybeSingle();
+      if (invite.error) throw invite.error;
+      const validInvite = invite.data
+        && !invite.data.claimed_at
+        && !invite.data.revoked_at
+        && new Date(invite.data.expires_at).getTime() > Date.now()
+        && (!invite.data.email || invite.data.email.toLowerCase() === email.toLowerCase());
+      if (!validInvite) {
+        return json({ error: 'Zaproszenie jest nieprawidłowe, wygasło albo zostało już wykorzystane.' }, corsHeaders, 403);
+      }
+    }
 
     let authUser;
     if (existing) {

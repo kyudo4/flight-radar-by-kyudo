@@ -285,6 +285,8 @@ returns boolean language sql stable security definer set search_path = public as
     join public.monitors monitor on monitor.id = m.monitor_id
     join public.flight_offers offer on offer.id = m.offer_id
     where m.id = p_match_id
+      and m.visible
+      and public.is_active_user(m.user_id)
       and m.user_id = auth.uid()
       and offer.price_pln is not null
       and offer.price_pln <= coalesce((monitor.filters ->> 'budget_pln')::numeric, 0)
@@ -305,7 +307,11 @@ language sql stable security definer set search_path = public as $$
     where history.offer_id = any(coalesce(p_offer_ids, '{}'::uuid[]))
       and exists (
         select 1 from public.user_matches match
-        where match.offer_id = history.offer_id and match.user_id = auth.uid()
+        where match.offer_id = history.offer_id
+          and match.user_id = auth.uid()
+          and match.visible
+          and public.is_active_user(match.user_id)
+          and public.match_within_monitor_budget(match.id)
       )
   ) ranked
   where ranked.row_number <= 12
@@ -389,6 +395,21 @@ begin
 end;
 $$;
 
+create or replace function public.hide_monitor_matches_on_filter_change()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.filters is distinct from old.filters then
+    update public.user_matches
+    set visible = false,
+        telegram_eligible = false,
+        updated_at = now()
+    where monitor_id = new.id
+      and visible;
+  end if;
+  return new;
+end;
+$$;
+
 drop trigger if exists touch_monitors_updated_at on public.monitors;
 create trigger touch_monitors_updated_at
   before update on public.monitors
@@ -398,6 +419,11 @@ drop trigger if exists touch_matches_updated_at on public.user_matches;
 create trigger touch_matches_updated_at
   before update on public.user_matches
   for each row execute procedure public.touch_updated_at();
+
+drop trigger if exists hide_monitor_matches_on_filter_change on public.monitors;
+create trigger hide_monitor_matches_on_filter_change
+  after update of filters on public.monitors
+  for each row execute procedure public.hide_monitor_matches_on_filter_change();
 
 create or replace function public.validate_monitor_filters()
 returns trigger language plpgsql set search_path = public as $$
@@ -677,6 +703,7 @@ grant execute on function public.cleanup_retention() to service_role;
 revoke all on function public.preference_verdict_delta(text, text) from public, anon, authenticated;
 revoke all on function public.preference_signal_score(text, integer, integer) from public, anon, authenticated;
 revoke all on function public.capture_feedback_preference() from public, anon, authenticated;
+revoke all on function public.hide_monitor_matches_on_filter_change() from public, anon, authenticated;
 
 drop trigger if exists validate_monitor_filters on public.monitors;
 create trigger validate_monitor_filters
