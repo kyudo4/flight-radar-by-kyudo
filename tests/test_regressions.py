@@ -1100,6 +1100,12 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('monitor?.filters?.budget_pln', app)
         self.assertIn('id="loadMoreOffersButton"', (ROOT / "site" / "index.html").read_text())
 
+    def test_monitor_edit_confirms_the_existing_row_was_updated(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn('.eq("user_id", user.id).select("id").maybeSingle()', app)
+        self.assertIn('.insert({ ...payload, user_id: user.id }).select("id").single()', app)
+        self.assertIn("Nie znaleziono tego monitora albo nie masz do niego dostępu.", app)
+
     def test_offer_and_monitor_cards_use_stacked_labeled_details(self):
         app = (ROOT / "site" / "app.js").read_text()
         styles = (ROOT / "site" / "styles.css").read_text()

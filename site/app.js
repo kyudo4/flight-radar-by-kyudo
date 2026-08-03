@@ -339,14 +339,16 @@
     try {
       const refreshed = { ...payload, last_scanned_at: null, next_scan_at: new Date().toISOString() };
       result = editingMonitorId
-        ? await client.from("monitors").update(refreshed).eq("id", editingMonitorId).eq("user_id", user.id)
-        : await client.from("monitors").insert({ ...payload, user_id: user.id });
+        ? await client.from("monitors").update(refreshed).eq("id", editingMonitorId).eq("user_id", user.id).select("id").maybeSingle()
+        : await client.from("monitors").insert({ ...payload, user_id: user.id }).select("id").single();
     } catch (error) {
       $("formMessage").textContent = `Nie udało się zapisać: ${error.message || "błąd połączenia"}`;
       return;
     }
-    $("formMessage").textContent = result.error ? result.error.message : "Zapisano.";
-    if (!result.error) { $("monitorDialog").close(); $("monitorForm").reset(); editingMonitorId = null; await loadMonitors(); await loadOffers(true); }
+    if (result.error) { $("formMessage").textContent = result.error.message; return; }
+    if (editingMonitorId && !result.data?.id) { $("formMessage").textContent = "Nie znaleziono tego monitora albo nie masz do niego dostępu."; return; }
+    $("formMessage").textContent = "Zapisano.";
+    $("monitorDialog").close(); $("monitorForm").reset(); editingMonitorId = null; await loadMonitors(); await loadOffers(true);
   }
   async function updateMonitor(id, patch) { const update = patch.status === "active" ? { ...patch, last_scanned_at: null, next_scan_at: new Date().toISOString() } : patch; try { const { error } = await client.from("monitors").update(update).eq("id", id).eq("user_id", user.id); if (error) throw error; await loadMonitors(); } catch (error) { alert(`Nie udało się zmienić monitora: ${error.message || "błąd połączenia"}`); } }
   async function deleteMonitor(id) { if (!confirm("Usunąć ten monitoring?")) return; try { const { error } = await client.from("monitors").delete().eq("id", id).eq("user_id", user.id); if (error) throw error; await loadMonitors(); await loadOffers(true); } catch (error) { alert(`Nie udało się zmienić monitora: ${error.message || "błąd połączenia"}`); } }
