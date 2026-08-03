@@ -1391,7 +1391,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260803-18', html)
+        self.assertIn('app.js?v=20260803-19', html)
         self.assertIn('styles.css?v=20260803-11', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
