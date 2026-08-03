@@ -34,10 +34,15 @@ def run_sql(query):
         with urllib.request.urlopen(request, timeout=60) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        # Do not print the response body: Supabase may echo SQL fragments.
-        raise RuntimeError(f"Supabase Management API returned HTTP {exc.code}") from exc
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(body).get("message") or json.loads(body).get("error") or "request rejected"
+        except (TypeError, ValueError):
+            detail = "request rejected"
+        raise RuntimeError(f"Supabase Management API HTTP {exc.code}: {str(detail)[:180]}") from exc
     if payload.get("error"):
-        raise RuntimeError("Supabase Management API rejected the SQL query")
+        detail = payload.get("error")
+        raise RuntimeError(f"Supabase Management API rejected the SQL query: {str(detail)[:180]}")
     return payload.get("result") or []
 
 
