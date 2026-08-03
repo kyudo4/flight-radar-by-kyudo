@@ -297,7 +297,12 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("successful_google_tasks = 0", source)
         self.assertIn("failed_google_tasks = 0", source)
         self.assertIn("successful_google_tasks == 0", source)
-        self.assertIn("source_degraded or source_unavailable", source)
+        self.assertIn('"error" if source_unavailable', source)
+
+    def test_source_error_with_some_successes_is_partial_not_fatal(self):
+        source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn('"partial" if task_errors or source_degraded', source)
+        self.assertIn("if source_unavailable:", source)
 
     def test_explicit_no_flights_is_not_a_source_failure(self):
         class NoFlightPage:
@@ -1049,6 +1054,19 @@ class FlightRadarRegressionTests(unittest.TestCase):
             with self.assertRaises(scanner.gflights.BlockedError): scanner.fetch_task(task)
             self.assertEqual(fetch.call_count, 1)
 
+    def test_parser_error_is_retried_for_one_queue_item(self):
+        task = {"origin": "GDN", "dest": "KIX", "date": "2026-10-22", "cabin": "economy"}
+        with patch.object(scanner.gflights, "fetch_gf", side_effect=[
+            scanner.gflights.SourceParseError("payload moved"), ("low", []),
+        ]) as fetch, patch.object(scanner.time, "sleep") as sleep:
+            self.assertEqual(scanner.fetch_task(task), ("low", []))
+        self.assertEqual(fetch.call_count, 2)
+        sleep.assert_called_once_with(1)
+
+    def test_failed_task_label_includes_return_date_and_cabin(self):
+        task = {"origin": "WAW", "dest": "NRT", "date": "2026-10-22", "return_date": "2026-11-06", "cabin": "business"}
+        self.assertEqual(scanner.task_label(task), "WAW-NRT-2026-10-22-powrót-2026-11-06/BUSINESS")
+
     def test_preference_read_retries_and_fails_closed(self):
         with patch.object(scanner, "fetch_all_rows", side_effect=[OSError("temporary"), OSError("temporary"), [{"score": 1}]]) as fetch, \
              patch.object(scanner.time, "sleep") as sleep:
@@ -1495,10 +1513,10 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("validRoundTripPairCount(from, to, returnFrom, returnTo)", app)
         self.assertIn("const pairCount = trip === \"round_trip\"", app)
 
-    def test_partial_scan_is_a_failed_workflow_result(self):
+    def test_partial_scan_is_recorded_without_failing_workflow(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
-        self.assertIn('if final_status == "partial":', source)
-        self.assertIn("Skan częściowy; część zapytań", source)
+        self.assertIn('"partial" if task_errors or source_degraded', source)
+        self.assertNotIn('if final_status == "partial":', source)
 
     def test_migrations_have_an_automatic_deployment_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
@@ -1647,8 +1665,9 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_source_structure_errors_are_not_reported_as_google_blocks(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn("source_degraded = True", source)
-        self.assertIn('"error" if source_degraded', source)
+        self.assertIn('"partial" if task_errors or source_degraded', source)
         self.assertIn("raise ScanSourceRun", source)
+        self.assertNotIn('raise ScanSourceRun("Skan częściowy', source)
 
     def test_frontend_and_scanner_have_legacy_database_fallbacks(self):
         app = (ROOT / "site" / "app.js").read_text()

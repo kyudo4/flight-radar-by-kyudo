@@ -463,18 +463,36 @@ def can_mark_stale_after_scan(*, selected_tasks, total_tasks, executed_tasks,
 
 
 def fetch_task(task):
-    """Ponawia tylko błędy sieciowe; blokadę Google zgłasza od razu."""
+    """Ponawia przejściowy błąd sieci lub parsera dla jednej trasy.
+
+    Google czasem renderuje niepełną stronę tylko przy pojedynczym żądaniu.
+    Jedna dodatkowa próba może wtedy uratować trasę, ale blokady i limity
+    pozostają natychmiast zatrzymywane, żeby nie dokładać ruchu do Google.
+    """
     last_error = None
     for attempt in range(FETCH_RETRIES):
         try:
             return gflights.fetch_gf(task["origin"], task["dest"], task["date"], seat=task["cabin"], return_date=task.get("return_date"))
         except gflights.BlockedError:
             raise
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (gflights.SourceParseError, urllib.error.URLError, TimeoutError, OSError) as exc:
             last_error = exc
             if attempt + 1 < FETCH_RETRIES:
                 time.sleep(2 ** attempt)
     raise last_error
+
+
+def task_label(task):
+    """Human-readable identity for a failed queue item and scan history."""
+    route = "%s-%s-%s" % (task.get("origin"), task.get("dest"), task.get("date"))
+    if task.get("return_date"):
+        route += "-powrót-%s" % task["return_date"]
+    return "%s/%s" % (route, str(task.get("cabin") or "unknown").upper())
+
+
+def task_error(task, error):
+    """Keep route, return date, cabin and error type in the bounded log."""
+    return "%s [%s]: %s" % (task_label(task), type(error).__name__, str(error)[:180])
 
 
 def _select_fair_bucket(items, max_count, allowed_cabins):
@@ -1201,17 +1219,17 @@ def main():
             except gflights.BlockedError as exc:
                 # Jedna twarda blokada zatrzymuje cały kolektor Google. Kolejne
                 # pozycje pozostają zaległe i wrócą w następnym przebiegu.
-                task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
+                task_errors.append(task_error(task, exc))
                 log("Przerwano Google po wykryciu blokady: %s" % task_errors[-1])
                 blocked = True
                 break
             except gflights.SourceCapacityError as exc:
-                task_errors.append("Google: %s; pozostałe kombinacje zachowano na kolejny skan" % str(exc)[:180])
+                task_errors.append("Google [%s]: %s; pozostałe kombinacje zachowano na kolejny skan" % (task_label(task), str(exc)[:180]))
                 log(task_errors[-1])
                 source_capacity_reached = True
                 break
             except Exception as exc:
-                task_errors.append("%s-%s-%s: %s" % (task["origin"], task["dest"], task["date"], str(exc)[:120]))
+                task_errors.append(task_error(task, exc))
                 log("Pominięto zapytanie po błędzie źródła: %s" % task_errors[-1])
                 source_errors_in_row, source_error_routes = record_source_error(
                     source_errors_in_row,
@@ -1254,9 +1272,13 @@ def main():
                 retry_at = now + timedelta(hours=1)
                 api("PATCH", "monitor_scan_items", body={"next_scan_at": retry_at.isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
                 if source_circuit_open(source_errors_in_row, source_error_routes):
-                    task_errors.append("Google: obwód ochronny po trzech kolejnych błędach źródła")
+                    warning = "Google: seria błędów źródła; nie przerywam kolejki, nieudane pozycje wrócą w cogodzinnym retry"
+                    if warning not in task_errors:
+                        task_errors.append(warning)
                     source_degraded = True
-                    break
+                    # Do not abort the entire run on parser errors. Each
+                    # failed item is already scheduled for the hourly retry;
+                    # hard Google blocks still use the separate break above.
             else:
                 api("PATCH", "monitor_scan_items", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
                 api("PATCH", "monitors", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["monitor_ids"])})
@@ -1286,7 +1308,7 @@ def main():
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
         source_unavailable = executed_count > 0 and failed_google_tasks > 0 and successful_google_tasks == 0
-        final_status = "blocked" if blocked else ("error" if source_degraded or source_unavailable else ("partial" if task_errors or source_capacity_reached or runtime_limit_reached else "ok"))
+        final_status = "blocked" if blocked else ("error" if source_unavailable else ("partial" if task_errors or source_degraded or source_capacity_reached or runtime_limit_reached else "ok"))
         # Do this only after every queued Google task in this run succeeded.
         # A failed/partial source response must preserve the previous offer
         # state; otherwise one Google outage hides all prices from the default
@@ -1307,10 +1329,8 @@ def main():
         log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
         if blocked:
             raise ScanBlockedRun("Google zablokował skan; kolejny przebieg pozostaje na bezpiecznym limicie")
-        if source_degraded or source_unavailable:
+        if source_unavailable:
             raise ScanSourceRun("Google zmienił lub zwrócił uszkodzoną strukturę danych; skan został bezpiecznie zatrzymany")
-        if final_status == "partial":
-            raise ScanSourceRun("Skan częściowy; część zapytań lub zapisów nie zakończyła się poprawnie")
     except ScanBlockedRun:
         raise
     except ScanSourceRun:

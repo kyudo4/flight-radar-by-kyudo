@@ -155,9 +155,12 @@ Opóźnienie między zapytaniami pozostaje włączone. Wartości można zmienić
 `GOOGLE_REQUEST_DELAY_SECONDS`.
 
 Odpowiedź Google `409` jest traktowana jak blokada już przy pierwszym żądaniu.
-Trzy kolejne błędy struktury danych zatrzymują kolektor z osobnym statusem `error`,
-żeby nie mylić zmiany formatu źródła z CAPTCHA lub ograniczeniem ruchu. Skaner nie
-ocenia ani nie wysyła ofert, jeżeli nie może odczytać profilu preferencji użytkownika.
+Przejściowy błąd parsera pojedynczej trasy dostaje jedną dodatkową próbę, a pozycja
+wraca do cogodzinnego retry. Jeżeli część tras przejdzie, cały przebieg kończy się
+statusem `partial`, a nie błędem całego skanu; historia zapisuje trasę, datę powrotu
+i klasę, której nie udało się odczytać. Twarda blokada Google nadal zatrzymuje
+kolektor natychmiast, żeby nie pogłębiać blokady. Skaner nie ocenia ani nie wysyła
+ofert, jeżeli nie może odczytać profilu preferencji użytkownika.
 
 ## Testy lokalne
 
