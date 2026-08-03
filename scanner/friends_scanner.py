@@ -799,8 +799,12 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
         # offer could be hidden by a 4/5-star Telegram threshold.
         stars = 5 if price <= budget * .55 else 4 if price <= budget * .90 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
         priority_airline = flight.get("airline") in PRIORITY
-        if sparse_asia_economy_exceptional(flight, budget, destination, cabin):
-            stars = 5
+    # This is a deliberately narrow override for an objectively exceptional
+    # Asia Economy fare. It must also apply when the route already has enough
+    # history for a market benchmark; otherwise the same fare can fall back to
+    # four stars merely because older observations were stored.
+    if sparse_asia_economy_exceptional(flight, budget, destination, cabin):
+        stars = 5
     preferred = {str(value).strip().upper() for value in filters.get("preferred_airlines", []) if str(value).strip()}
     airline_code = str(flight.get("airline") or "").strip().upper()
     airline_name = str(flight.get("airline_name") or "").strip().upper()
