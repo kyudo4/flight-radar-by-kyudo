@@ -52,8 +52,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
    `SUPABASE_PROJECT_REF`. Token Supabase musi mieć dostęp Management API
    `database_read` i `database_write`, ponieważ workflow wykonuje zapytania
    migracyjne po stronie serwera. `SUPABASE_DB_PASSWORD` jest opcjonalnym
-   sekretem awaryjnym: workflow użyje go tylko wtedy, gdy token Management API
-   nie może wykonać zapytania.
+    sekretem awaryjnym: workflow użyje go tylko wtedy, gdy token Management API
+    nie może wykonać zapytania; runner automatycznie doinstaluje klienta PostgreSQL.
 6. Zaloguj się pierwszy raz przez Telegram, odczytaj `telegram_user_id` z
    `public.profiles` i wykonaj `supabase/bootstrap-admin.sql` po jego wpisaniu.
 7. Włącz GitHub Pages przez workflow `Publish Flight Radar by Kyudo dashboard`.

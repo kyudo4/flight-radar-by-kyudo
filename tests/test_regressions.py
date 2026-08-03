@@ -1452,6 +1452,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("SUPABASE_ACCESS_TOKEN", workflow)
         self.assertIn("SUPABASE_DB_PASSWORD", workflow)
         self.assertIn("scripts/apply_supabase_migrations.py", workflow)
+        self.assertIn("postgresql-client", workflow)
         script = (ROOT / "scripts" / "apply_supabase_migrations.py").read_text()
         self.assertIn("supabase_migrations.schema_migrations", script)
         self.assertIn("on conflict (version) do nothing", script)
