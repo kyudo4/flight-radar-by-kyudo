@@ -175,6 +175,11 @@ def migration_files():
     return files
 
 
+def missing_migration_ledger(error):
+    message = str(error).lower()
+    return "supabase_migrations.schema_migrations" in message and "does not exist" in message
+
+
 def main():
     files = migration_files()
     if not files:
@@ -191,18 +196,31 @@ def main():
         execute_file = lambda path: run_sql(path.read_text(encoding="utf-8"))
         print("Using Supabase Management API")
     except RuntimeError as api_error:
-        if not os.environ.get("SUPABASE_DB_PASSWORD"):
+        if missing_migration_ledger(api_error):
+            rows = []
+            execute_sql = run_sql
+            execute_file = lambda path: run_sql(path.read_text(encoding="utf-8"))
+            print("Migration ledger is absent; bootstrapping it with the first migration")
+        elif not os.environ.get("SUPABASE_DB_PASSWORD"):
             raise RuntimeError(
                 f"Management API migration failed: {api_error}. "
                 "Set SUPABASE_DB_PASSWORD for the direct database fallback."
             ) from api_error
-        print(
-            "Management API unavailable; using the direct database fallback "
-            f"({api_error})"
-        )
-        rows = run_direct_sql(ledger_query)
-        execute_sql = run_direct_sql
-        execute_file = lambda path: run_direct_sql(path=path)
+        else:
+            print(
+                "Management API unavailable; using the direct database fallback "
+                f"({api_error})"
+            )
+            try:
+                rows = run_direct_sql(ledger_query)
+            except RuntimeError as database_error:
+                if not missing_migration_ledger(database_error):
+                    raise RuntimeError(
+                        f"Management API failed: {api_error}; direct database failed: {database_error}"
+                    ) from database_error
+                rows = []
+            execute_sql = run_direct_sql
+            execute_file = lambda path: run_direct_sql(path=path)
     applied = {
         str(row.get("version"))
         for row in rows

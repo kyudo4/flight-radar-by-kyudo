@@ -1454,12 +1454,15 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("scripts/apply_supabase_migrations.py", workflow)
         self.assertIn("postgresql-client", workflow)
         script = (ROOT / "scripts" / "apply_supabase_migrations.py").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260803000300_valid_round_trip_pair_limit.sql").read_text()
         self.assertIn("supabase_migrations.schema_migrations", script)
         self.assertIn("on conflict (version) do nothing", script)
         self.assertIn("run_direct_sql", script)
         self.assertIn("Management API unavailable", script)
         self.assertIn("pooler.supabase.com", script)
         self.assertIn("PGSSLMODE", script)
+        self.assertIn("missing_migration_ledger", script)
+        self.assertIn("create schema if not exists supabase_migrations", migration)
 
     def test_frontend_handles_invalid_invite_and_friendly_scan_statuses(self):
         app = (ROOT / "site" / "app.js").read_text()

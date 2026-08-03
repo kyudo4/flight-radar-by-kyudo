@@ -1,6 +1,16 @@
 -- Keep the database limit identical to the frontend and scanner.
 -- A round-trip combination exists only when the return is after departure.
 
+-- The first production setup was applied manually and may not have the
+-- Supabase migration ledger. Create the minimal ledger used by CI.
+create schema if not exists supabase_migrations;
+
+create table if not exists supabase_migrations.schema_migrations (
+  version text primary key,
+  name text not null,
+  statements text[] not null default '{}'::text[]
+);
+
 create or replace function public.valid_round_trip_pair_count(
   p_from date,
   p_to date,

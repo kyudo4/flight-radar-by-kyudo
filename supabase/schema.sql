@@ -3,6 +3,14 @@
 
 create extension if not exists pgcrypto;
 
+-- Keep a small migration ledger for the automated deployment workflow.
+create schema if not exists supabase_migrations;
+create table if not exists supabase_migrations.schema_migrations (
+  version text primary key,
+  name text not null,
+  statements text[] not null default '{}'::text[]
+);
+
 create type public.profile_status as enum ('pending', 'active', 'suspended', 'deleted');
 create type public.profile_role as enum ('user', 'admin');
 
