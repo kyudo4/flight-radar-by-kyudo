@@ -354,6 +354,29 @@ class FlightRadarRegressionTests(unittest.TestCase):
         with self.assertRaises(google_browser.BrowserParseError):
             google_browser._load_cards(ErrorShellPage(), "https://google.test")
 
+    def test_round_trip_without_exact_return_is_an_empty_result_not_source_failure(self):
+        outbound = [{
+            "airline_name": "Air France", "price_pln": 4500,
+            "duration_h": 13.0, "stops": 1, "departure": "10:00 → 20:00",
+            "_label": "outbound",
+        }]
+        class Page:
+            url = "https://google.test/return"
+
+            def get_by_role(self, role, **kwargs):
+                return type("Heading", (), {"wait_for": lambda self, timeout=None: None})()
+
+        with patch.object(google_browser, "_page", return_value=Page()), \
+             patch.object(google_browser, "_load_cards", side_effect=[outbound, outbound, [{
+                 "airline_name": "Air France", "price_pln": 4500,
+                 "duration_h": 14.0, "stops": 1, "departure": "09:00 → 19:00",
+                 "_label": "return",
+             }]]), \
+             patch.object(google_browser, "_click_card", side_effect=[True, False]), \
+             patch.object(google_browser, "_selected_itinerary_link", return_value=""):
+            with self.assertRaises(google_browser.BrowserNoFlightsError):
+                google_browser.fetch_rendered("https://google.test", return_date="2027-03-12")
+
     def test_no_flights_fallback_is_returned_as_an_empty_result(self):
         with patch.object(gflights, "_fetch_server", side_effect=gflights.SourceParseError("payload moved")), \
              patch.object(gflights.google_browser, "fetch_rendered", side_effect=google_browser.BrowserNoFlightsError("empty")):

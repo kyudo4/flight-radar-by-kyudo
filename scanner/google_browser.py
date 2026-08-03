@@ -489,7 +489,11 @@ def fetch_rendered(url, return_date=None):
                 "link": exact_link,
             })
     if not combined:
-        if no_return_flights or (return_attempts > 0 and return_parse_failures >= return_attempts):
+        # Once Google has opened the returning-flight view, a missing exact
+        # itinerary is a valid empty result for this date pair—not evidence
+        # that Google's whole response format is broken. Treat all such
+        # cases alike so one unavailable return leg cannot poison the scan.
+        if return_attempts > 0 or no_return_flights:
             raise BrowserNoFlightsError("Google nie znalazł potwierdzonego lotu powrotnego")
         raise BrowserParseError("Nie udało się potwierdzić odcinka powrotnego w Google")
     return combined
