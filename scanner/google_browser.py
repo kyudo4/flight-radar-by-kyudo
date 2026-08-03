@@ -388,6 +388,8 @@ def fetch_rendered(url, return_date=None):
 
     combined = []
     no_return_flights = False
+    return_attempts = 0
+    return_parse_failures = 0
     for candidate_index, outbound in enumerate(_outbound_candidates(outbound_cards)):
         # Two complementary outbound choices provide airline variety.  A
         # third is attempted only when both produced no valid return.
@@ -401,11 +403,15 @@ def fetch_rendered(url, return_date=None):
                 raise BrowserParseError("Nie znaleziono wybranej karty wylotowej Google")
             page.get_by_role("heading", name="Returning flights", exact=True).wait_for(timeout=25000)
             return_url = page.url
+            return_attempts += 1
             inbound_cards = _load_cards(page, return_url, returning=True)
         except BrowserBlockedError:
             raise
         except BrowserNoFlightsError:
             no_return_flights = True
+            continue
+        except BrowserParseError:
+            return_parse_failures += 1
             continue
         except Exception:
             continue
@@ -433,7 +439,7 @@ def fetch_rendered(url, return_date=None):
                 "link": return_url,
             })
     if not combined:
-        if no_return_flights:
+        if no_return_flights or (return_attempts > 0 and return_parse_failures >= return_attempts):
             raise BrowserNoFlightsError("Google nie znalazł potwierdzonego lotu powrotnego")
         raise BrowserParseError("Nie udało się potwierdzić odcinka powrotnego w Google")
     return combined

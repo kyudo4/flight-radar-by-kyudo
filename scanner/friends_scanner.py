@@ -123,9 +123,21 @@ def api(method, path, body=None, params=None):
         if params and "on_conflict" in params:
             preference = "resolution=merge-duplicates,return=representation"
         req.add_header("Prefer", preference)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        raw = resp.read()
-        return json.loads(raw) if raw else []
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else []
+    except urllib.error.HTTPError as exc:
+        # PostgREST otherwise exposes only "HTTP Error 400", which hides the
+        # constraint or column that rejected a particular candidate. Preserve
+        # a bounded response body so the next scan can be diagnosed safely.
+        try:
+            detail = exc.read().decode("utf-8", "replace").strip()
+        except Exception:
+            detail = ""
+        if detail:
+            detail = " %s" % detail[:240]
+        raise urllib.error.HTTPError(exc.url, exc.code, "%s%s" % (exc.reason, detail), exc.hdrs, None) from exc
 
 
 def telegram(method, payload):
