@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "supabase/migrations/**"
+      - "scripts/apply_supabase_audit_migrations.py"
       - ".github/workflows/supabase-migrations.yml"
   workflow_dispatch:
 
