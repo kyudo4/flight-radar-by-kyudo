@@ -3,6 +3,9 @@ name: Flight Radar by Kyudo scan
 on:
   schedule:
     - cron: "17 */6 * * *"
+    # Retry failed or deferred queue items hourly. Normal items still carry
+    # a six-hour next_scan_at, so this runner stays idle without due work.
+    - cron: "47 * * * *"
   workflow_dispatch:
     inputs:
       reserved_run_id:

@@ -1281,8 +1281,11 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("runtime_limit_reached", source)
         self.assertIn("timeout-minutes: 60", workflow)
         self.assertIn('MAX_SCAN_RUNTIME_SECONDS: "3000"', workflow)
+        self.assertIn('cron: "17 */6 * * *"', workflow)
+        self.assertIn('cron: "47 * * * *"', workflow)
         readme = (ROOT / "README.md").read_text()
         self.assertIn("aż do 400 + 40", readme)
+        self.assertIn("cogodzinny retry", readme)
 
     def test_telegram_feedback_has_fast_separate_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "telegram-feedback.yml").read_text()

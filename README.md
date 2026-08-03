@@ -12,7 +12,8 @@ jej stanu, tokenów Telegrama ani historii alertów.
 - `monitor_scan_items` — trwała kolejka każdej konkretnej trasy, daty, klasy i —
   dla podróży tam i z powrotem — pary wylot/powrót;
 - `scanner/` — skaner Python uruchamiany przez GitHub Actions;
-- `.github/workflows/scan.yml` — wspólny skan 4 razy na dobę (co 6 godzin);
+- `.github/workflows/scan.yml` — wspólny skan 4 razy na dobę (co 6 godzin) oraz
+  cogodzinny retry zaległych pozycji po błędach źródła;
 - `.github/workflows/telegram-feedback.yml` — cogodzinny health-check i awaryjny odbiór reakcji z Telegrama;
 - Google Flights — wspólny kolektor z kontrolowanym limitem zapytań i retry dla przejściowych błędów;
 - RSS źródeł promocyjnych — Secret Flying, Fly4Free, LoyaltyLobby, OMAAT, Travel Dealz, View From The Wing, FlyerTalk i Reddit;
