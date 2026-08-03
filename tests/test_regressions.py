@@ -1463,6 +1463,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("PGSSLMODE", script)
         self.assertIn("missing_migration_ledger", script)
         self.assertIn("create schema if not exists supabase_migrations", migration)
+        self.assertIn('"port": "5432"', script)
 
     def test_frontend_handles_invalid_invite_and_friendly_scan_statuses(self):
         app = (ROOT / "site" / "app.js").read_text()

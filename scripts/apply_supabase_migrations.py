@@ -110,7 +110,8 @@ def run_direct_sql(query=None, path=None):
         candidates = [
             {
                 "host": f"aws-0-{region}.pooler.supabase.com",
-                "port": "6543",
+                # Session pooler is the supported IPv4 path for migrations and DDL.
+                "port": "5432",
                 "user": f"postgres.{PROJECT_REF}",
             }
             for region in POOLER_REGIONS
