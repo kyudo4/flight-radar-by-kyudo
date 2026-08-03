@@ -1450,11 +1450,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
         self.assertIn('"supabase/migrations/**"', workflow)
         self.assertIn("SUPABASE_ACCESS_TOKEN", workflow)
-        self.assertNotIn("SUPABASE_DB_PASSWORD", workflow)
+        self.assertIn("SUPABASE_DB_PASSWORD", workflow)
         self.assertIn("scripts/apply_supabase_migrations.py", workflow)
         script = (ROOT / "scripts" / "apply_supabase_migrations.py").read_text()
         self.assertIn("supabase_migrations.schema_migrations", script)
         self.assertIn("on conflict (version) do nothing", script)
+        self.assertIn("run_direct_sql", script)
+        self.assertIn("Management API unavailable", script)
 
     def test_frontend_handles_invalid_invite_and_friendly_scan_statuses(self):
         app = (ROOT / "site" / "app.js").read_text()

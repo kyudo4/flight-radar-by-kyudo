@@ -11,6 +11,7 @@ idempotent and is applied in filename order.
 import json
 import os
 import re
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -67,6 +68,55 @@ def run_sql(query):
     return payload if isinstance(payload, list) else []
 
 
+def run_direct_sql(query=None, path=None):
+    """Run SQL through psql without ever putting the password in arguments."""
+    password = os.environ.get("SUPABASE_DB_PASSWORD")
+    if not password:
+        raise RuntimeError(
+            "SUPABASE_DB_PASSWORD is required for the direct database fallback"
+        )
+    command = [
+        "psql",
+        "--no-psqlrc",
+        "--tuples-only",
+        "--no-align",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-h",
+        os.environ.get("SUPABASE_DB_HOST", f"db.{PROJECT_REF}.supabase.co"),
+        "-p",
+        os.environ.get("SUPABASE_DB_PORT", "5432"),
+        "-U",
+        os.environ.get("SUPABASE_DB_USER", "postgres"),
+        "-d",
+        os.environ.get("SUPABASE_DB_NAME", "postgres"),
+    ]
+    if query is not None:
+        command.extend(["-c", query])
+    elif path is not None:
+        command.extend(["-f", str(path)])
+    else:
+        raise RuntimeError("direct SQL execution needs a query or file")
+    environment = os.environ.copy()
+    environment["PGPASSWORD"] = password
+    completed = subprocess.run(
+        command,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "request rejected").strip()
+        raise RuntimeError(f"direct PostgreSQL migration failed: {detail[:240]}")
+    rows = []
+    for line in completed.stdout.splitlines():
+        value = line.strip()
+        if value:
+            rows.append({"version": value})
+    return rows
+
+
 def migration_files():
     files = []
     for path in sorted(MIGRATION_DIR.glob("*.sql")):
@@ -82,10 +132,28 @@ def main():
         print("No pending production migrations in the configured range")
         return
 
-    rows = run_sql(
+    ledger_query = (
         "select version from supabase_migrations.schema_migrations "
         "where version >= '%s' order by version" % MIN_VERSION.replace("'", "''")
     )
+    try:
+        rows = run_sql(ledger_query)
+        execute_sql = run_sql
+        execute_file = lambda path: run_sql(path.read_text(encoding="utf-8"))
+        print("Using Supabase Management API")
+    except RuntimeError as api_error:
+        if not os.environ.get("SUPABASE_DB_PASSWORD"):
+            raise RuntimeError(
+                f"Management API migration failed: {api_error}. "
+                "Set SUPABASE_DB_PASSWORD for the direct database fallback."
+            ) from api_error
+        print(
+            "Management API unavailable; using the direct database fallback "
+            f"({api_error})"
+        )
+        rows = run_direct_sql(ledger_query)
+        execute_sql = run_direct_sql
+        execute_file = lambda path: run_direct_sql(path=path)
     applied = {
         str(row.get("version"))
         for row in rows
@@ -95,10 +163,10 @@ def main():
         if version in applied:
             print(f"Already applied {version}")
             continue
-        run_sql(path.read_text(encoding="utf-8"))
+        execute_file(path)
         safe_version = version.replace("'", "''")
         safe_name = name.replace("'", "''")
-        run_sql(
+        execute_sql(
             "insert into supabase_migrations.schema_migrations(version, name, statements) "
             f"values ('{safe_version}', '{safe_name}', ARRAY[]::text[]) "
             "on conflict (version) do nothing"
