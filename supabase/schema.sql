@@ -746,6 +746,28 @@ revoke all on function public.preference_signal_score(text, integer, integer) fr
 revoke all on function public.capture_feedback_preference() from public, anon, authenticated;
 revoke all on function public.hide_monitor_matches_on_filter_change() from public, anon, authenticated;
 
+-- Telegram alert level is kept only for backwards compatibility with old rows.
+-- Every offer that passes the monitor filters is eligible for Telegram.
+create or replace function public.normalize_telegram_rules()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  new.telegram_rules := jsonb_set(
+    coalesce(new.telegram_rules, '{}'::jsonb),
+    '{min_stars}',
+    '3'::jsonb,
+    true
+  );
+  return new;
+end;
+$$;
+
+revoke all on function public.normalize_telegram_rules() from public, anon, authenticated;
+
+drop trigger if exists normalize_telegram_rules on public.monitors;
+create trigger normalize_telegram_rules
+  before insert or update of telegram_rules on public.monitors
+  for each row execute procedure public.normalize_telegram_rules();
+
 drop trigger if exists validate_monitor_filters on public.monitors;
 create trigger validate_monitor_filters
   before insert or update of name, filters, telegram_rules on public.monitors

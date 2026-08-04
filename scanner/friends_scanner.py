@@ -1006,7 +1006,7 @@ def process_link_updates():
 def send_due_alert(match, offer, monitor, connection):
     rules = monitor.get("telegram_rules") or {}
     stars = match["stars"]
-    if not connection or stars < int(rules.get("min_stars") or 4):
+    if not connection:
         return False
     if "Powrót do potwierdzenia" in (offer.get("tags") or []):
         return False
@@ -1090,7 +1090,6 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
         destination=task["dest"], cabin=cabin,
         market_prices=route_prices,
     )
-    rules = monitor.get("telegram_rules") or {}
     is_new_low = bool(current_price is not None and (previous_min is None or current_price < previous_min))
     is_new_airline = bool(airline and airline not in route_airlines)
     round_trip_verified = "Powrót do potwierdzenia" not in (offer.get("tags") or [])
@@ -1098,7 +1097,7 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
         round_trip_verified = False
     match = {"user_id": monitor["user_id"], "monitor_id": monitor["id"], "offer_id": offer["id"], "stars": stars,
              "visible": True,
-             "telegram_eligible": round_trip_verified and (is_new_low or is_new_airline) and stars >= int(rules.get("min_stars") or 4),
+             "telegram_eligible": round_trip_verified and (is_new_low or is_new_airline),
              "new_airline": is_new_airline,
              "min_price_for_user": min(prices) if prices else None}
     # Jeżeli alert nie został jeszcze wysłany (brak połączenia Telegram albo

@@ -21,7 +21,6 @@
   const AIRPORT_OVERRIDES = { GDN: "Gdańsk", WAW: "Warszawa", POZ: "Poznań", OSL: "Oslo", ARN: "Sztokholm", CPH: "Kopenhaga", VIE: "Wiedeń", BUD: "Budapeszt", MXP: "Mediolan", IST: "Stambuł", BKK: "Bangkok", SIN: "Singapur", KUL: "Kuala Lumpur", HKG: "Hongkong", HAN: "Hanoi", SGN: "Ho Chi Minh", HND: "Tokio", NRT: "Tokio", ICN: "Seul" };
   const AIRPORTS = { ...AIRPORT_OVERRIDES };
   const CABINS = { BUSINESS: "Business", FIRST: "First", PREMIUM_ECONOMY: "Premium Economy", "PREMIUM-ECONOMY": "Premium Economy", ECONOMY: "Economy" };
-  const TELEGRAM_LEVELS = { 3: "Wszystkie powiadomienia", 4: "Interesujące", 5: "Najlepsze okazje" };
 
   function show(id, on = true) { $(id).classList.toggle("hidden", !on); }
   function message(text, good = false) { const el = $("authMessage"); el.textContent = text; el.className = "message" + (good ? " good" : ""); }
@@ -57,7 +56,6 @@
   const airportLabel = value => { const code = String(value || "").trim().toUpperCase(); const city = airportName(code); return city && city.toUpperCase() !== code ? `${city} (${code})` : code; };
   const routeName = value => String(value || "").split(/\s*→\s*/).map(airportLabel).join(" → ");
   const monitorCabins = filters => Array.isArray(filters?.cabins) && filters.cabins.length ? filters.cabins : (filters?.cabin ? [filters.cabin] : []);
-  const telegramLevel = value => TELEGRAM_LEVELS[Number(value)] || "Nieustawiony";
   const offerData = match => { const relation = match?.flight_offers; return Array.isArray(relation) ? (relation[0] || {}) : (relation || {}); };
 
   async function loadAirportData() {
@@ -227,7 +225,7 @@
   }
 
   function renderMonitor(m) {
-    const f = m.filters || {}, r = m.telegram_rules || {};
+    const f = m.filters || {};
     const cabins = monitorCabins(f);
     const cabinLabel = cabins.map(cabin => CABINS[cabin] || cabin).join(", ");
     const route = `${(f.origins || []).map(airportLabel).join(", ")} → ${(f.destinations || []).map(airportLabel).join(", ")}`;
@@ -235,7 +233,7 @@
     const airlineRules = [(f.preferred_airlines || []).length ? `Preferowane: ${(f.preferred_airlines || []).join(", ")}` : "", (f.excluded_airlines || []).length ? `Wykluczone: ${(f.excluded_airlines || []).join(", ")}` : ""].filter(Boolean).join(" · ");
     const durationLabel = f.max_duration_h ? `maks. ${esc(f.max_duration_h)}h` : "bez limitu czasu";
     const dateLabel = f.trip_type === "round_trip" ? `${dateFmt(f.from)}–${dateFmt(f.to)} · powrót ${dateFmt(f.return_from)}–${dateFmt(f.return_to)}` : `${dateFmt(f.from)}–${dateFmt(f.to)}`;
-    return `<article class="monitor-card"><div class="monitor-card-head"><div><h3>${esc(m.name)}</h3><div class="monitor-route">${esc(route)}</div></div><span class="monitor-status ${m.status === "active" ? "status-active" : "status-suspended"}">${m.status === "active" ? "Aktywny" : "Wstrzymany"}</span></div><div class="monitor-info"><div class="monitor-info-row"><span>Klasa</span><strong>${esc(cabinLabel || "—")}</strong></div><div class="monitor-info-row"><span>Daty</span><strong>${esc(dateLabel)}</strong></div><div class="monitor-info-row"><span>Budżet</span><strong>Do ${esc(f.budget_pln ?? "—")} PLN</strong></div><div class="monitor-info-row"><span>Lot</span><strong>${durationLabel} · maks. ${esc(f.max_stops ?? "—")} przesiad.</strong></div><div class="monitor-info-row"><span>Telegram</span><strong>${esc(telegramLevel(r.min_stars))}</strong></div>${airlineRules ? `<div class="monitor-info-row monitor-info-wide"><span>Linie</span><strong>${esc(airlineRules)}</strong></div>` : ""}<div class="monitor-info-row monitor-info-wide"><span>Status skanu</span><strong>${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</strong></div></div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
+    return `<article class="monitor-card"><div class="monitor-card-head"><div><h3>${esc(m.name)}</h3><div class="monitor-route">${esc(route)}</div></div><span class="monitor-status ${m.status === "active" ? "status-active" : "status-suspended"}">${m.status === "active" ? "Aktywny" : "Wstrzymany"}</span></div><div class="monitor-info"><div class="monitor-info-row"><span>Klasa</span><strong>${esc(cabinLabel || "—")}</strong></div><div class="monitor-info-row"><span>Daty</span><strong>${esc(dateLabel)}</strong></div><div class="monitor-info-row"><span>Budżet</span><strong>Do ${esc(f.budget_pln ?? "—")} PLN</strong></div><div class="monitor-info-row"><span>Lot</span><strong>${durationLabel} · maks. ${esc(f.max_stops ?? "—")} przesiad.</strong></div><div class="monitor-info-row"><span>Telegram</span><strong>Wszystkie oferty spełniające filtry</strong></div>${airlineRules ? `<div class="monitor-info-row monitor-info-wide"><span>Linie</span><strong>${esc(airlineRules)}</strong></div>` : ""}<div class="monitor-info-row monitor-info-wide"><span>Status skanu</span><strong>${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</strong></div></div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
   }
 
   function updateRoundTripFields() {
@@ -304,7 +302,7 @@
     $("monitorDuration").value = f.max_duration_h || ""; $("monitorStops").value = Number.isInteger(f.max_stops) ? f.max_stops : "";
     $("monitorPreferredAirlines").value = (f.preferred_airlines || []).join(", ");
     $("monitorExcludedAirlines").value = (f.excluded_airlines || []).join(", "); $("monitorDirectOnly").checked = Boolean(f.direct_only);
-    $("telegramStars").value = r.min_stars || ""; $("telegramDrop").value = r.drop_percent || ""; $("telegramImmediate").checked = Boolean(r.immediate_new_low);
+    $("telegramDrop").value = r.drop_percent || ""; $("telegramImmediate").checked = Boolean(r.immediate_new_low);
     $("formMessage").textContent = ""; updateRoundTripFields(); $("monitorDialog").showModal();
   }
 
@@ -315,8 +313,8 @@
     const trip = $("monitorTripType").value, from = $("monitorFrom").value, to = $("monitorTo").value;
     const returnFrom = $("monitorReturnFrom").value, returnTo = $("monitorReturnTo").value;
     const cabins = [...document.querySelectorAll("input[name='monitorCabin']:checked")].map(input => input.value), budgetRaw = $("monitorBudget").value.trim(), durationRaw = $("monitorDuration").value.trim(), stopsRaw = $("monitorStops").value.trim();
-    const starsRaw = $("telegramStars").value, dropRaw = $("telegramDrop").value.trim();
-    const budget = Number(budgetRaw), maxDuration = durationRaw ? Number(durationRaw) : null, maxStops = Number(stopsRaw), telegramStars = Number(starsRaw), telegramDrop = Number(dropRaw);
+    const dropRaw = $("telegramDrop").value.trim();
+    const budget = Number(budgetRaw), maxDuration = durationRaw ? Number(durationRaw) : null, maxStops = Number(stopsRaw), telegramDrop = Number(dropRaw);
     const validIata = values => values.length > 0 && values.every(value => /^[A-Z]{3}$/.test(value) && (!airportDataReady || Boolean(AIRPORTS[value])));
     if (!name) { $("formMessage").textContent = "Podaj nazwę monitoringu."; return; }
     if (!validIata(origins) || !validIata(destinations) || origins.length > 5 || destinations.length > 5) { $("formMessage").textContent = "Wybierz od 1 do 5 lotnisk wylotu i celu z podpowiedzi."; return; }
@@ -329,11 +327,11 @@
       : days;
     const combinationUpperBound = pairCount * origins.length * destinations.length * cabins.length;
     if (combinationUpperBound > MAX_MONITOR_COMBINATIONS) { $("formMessage").textContent = `Monitor może wygenerować do ${combinationUpperBound.toLocaleString("pl-PL")} kombinacji. Maksymalnie można zapisać ${MAX_MONITOR_COMBINATIONS.toLocaleString("pl-PL")}.`; return; }
-    if (!cabins.length || cabins.length > 4 || !budgetRaw || !stopsRaw || !starsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || (durationRaw && (!Number.isFinite(maxDuration) || maxDuration <= 0)) || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isInteger(telegramStars) || telegramStars < 3 || telegramStars > 5 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Wybierz co najmniej jedną klasę i uzupełnij wymagane kryteria. Maksymalny czas możesz pozostawić pusty, aby nie ograniczać długości połączenia."; return; }
+    if (!cabins.length || cabins.length > 4 || !budgetRaw || !stopsRaw || !dropRaw || !Number.isFinite(budget) || budget <= 0 || (durationRaw && (!Number.isFinite(maxDuration) || maxDuration <= 0)) || !Number.isInteger(maxStops) || maxStops < 0 || maxStops > 9 || !Number.isFinite(telegramDrop) || telegramDrop < 1 || telegramDrop > 50) { $("formMessage").textContent = "Wybierz co najmniej jedną klasę i uzupełnij wymagane kryteria. Maksymalny czas możesz pozostawić pusty, aby nie ograniczać długości połączenia."; return; }
     const excludedAirlines = csv($("monitorExcludedAirlines").value);
     const preferredAirlines = csv($("monitorPreferredAirlines").value);
     const f = { origins, destinations, from, to, trip_type: trip, return_from: trip === "round_trip" ? returnFrom : null, return_to: trip === "round_trip" ? returnTo : null, cabins, cabin: cabins[0], budget_pln: budget, max_duration_h: maxDuration, max_stops: maxStops, preferred_airlines: preferredAirlines, direct_only: $("monitorDirectOnly").checked, excluded_airlines: excludedAirlines };
-    const r = { min_stars: telegramStars, drop_percent: telegramDrop, immediate_new_low: $("telegramImmediate").checked };
+    const r = { min_stars: 3, drop_percent: telegramDrop, immediate_new_low: $("telegramImmediate").checked };
     const payload = { name, filters: f, app_rules: { min_stars: 1 }, telegram_rules: r, expires_at: f.to || null };
     let result;
     try {

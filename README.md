@@ -95,6 +95,9 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   dopasowanie;
 - ponowny alert tej samej oferty wymaga spadku ceny o próg zapisany przez
   użytkownika (domyślnie 10%);
+- Telegram wysyła wszystkie oferty spełniające filtry monitora — rating
+  gwiazdkowy jest informacyjny i nie blokuje alertu. Reguły antyduplikatów,
+  nowych linii i ponownego alertu po spadku ceny nadal obowiązują;
 - cena jest zapisywana w historii, a oferta bez potwierdzenia przez 24 godziny
   dostaje status „Cena niepotwierdzona”; panel domyślnie pokazuje tylko ceny aktualne;
 - historia ceny zapisuje tylko zmiany, panel pobiera ograniczoną liczbę ostatnich punktów,

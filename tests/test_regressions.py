@@ -1151,12 +1151,34 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('name="referrer" content="no-referrer"', html)
         self.assertIn('href="https://t.me/flight_radar_kyudo_bot"', html)
 
-    def test_telegram_notification_levels_have_plain_language_labels(self):
+    def test_telegram_notifications_always_include_all_matching_ratings(self):
         html = (ROOT / "site" / "index.html").read_text()
         app = (ROOT / "site" / "app.js").read_text()
-        for label in ("Wszystkie powiadomienia", "Interesujące", "Najlepsze okazje"):
-            self.assertIn(label, html)
-            self.assertIn(label, app)
+        self.assertIn("Wszystkie oferty spełniające filtry", html)
+        self.assertIn("Wszystkie oferty spełniające filtry", app)
+        self.assertNotIn("telegramStars", html)
+        self.assertNotIn("telegramStars", app)
+
+    def test_low_rated_matching_offer_is_still_telegram_eligible(self):
+        match = {"id": "match-low", "stars": 1, "telegram_eligible": True,
+                 "new_airline": True, "last_notified_price": None}
+        offer = {"price_pln": 4500, "tags": [], "route": "WAW → BKK",
+                 "cabin": "ECONOMY", "airline_name": "Air China",
+                 "travel_date": "2026-10-22", "link": "https://example.com"}
+        monitor = {"filters": {"budget_pln": 5000},
+                   "telegram_rules": {"min_stars": 5, "drop_percent": 10}}
+        with patch.object(scanner, "telegram", return_value={"ok": True}), \
+             patch.object(scanner, "api") as api:
+            self.assertTrue(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
+        api.assert_called_once()
+
+    def test_telegram_all_alerts_migration_normalizes_legacy_thresholds(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260804000100_telegram_all_alerts.sql").read_text()
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn("normalize_telegram_rules", migration)
+        self.assertIn("'{min_stars}'", migration)
+        self.assertIn("min_stars: 3", (ROOT / "site" / "app.js").read_text())
+        self.assertNotIn('stars < int(rules.get("min_stars")', scanner_source)
 
     def test_frontend_loads_matches_and_offers_separately(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1471,7 +1493,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260803-19', html)
+        self.assertIn('app.js?v=20260804-1', html)
         self.assertIn('styles.css?v=20260803-11', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
