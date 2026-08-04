@@ -19,6 +19,14 @@ Deno.serve(async (request) => {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, corsHeaders, 405);
 
   try {
+    let requestBody: Record<string, unknown> = {};
+    try {
+      const parsed = await request.json();
+      if (parsed && typeof parsed === 'object') requestBody = parsed as Record<string, unknown>;
+    } catch (_error) {
+      // An empty body is the normal path for the queued-scan button.
+    }
+    const fullQueueScan = requestBody.full_queue_scan === true;
     const authHeader = request.headers.get('authorization') || '';
     const accessToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -68,7 +76,11 @@ Deno.serve(async (request) => {
       },
       body: JSON.stringify({
         ref: 'main',
-        ...(reservedRun ? { inputs: { reserved_run_id: reservedRun } } : {})
+        inputs: {
+          ...(reservedRun ? { reserved_run_id: reservedRun } : {}),
+          force_scan: 'true',
+          ...(fullQueueScan ? { full_queue_scan: 'true' } : {})
+        }
       })
     });
     if (!githubResponse.ok) {

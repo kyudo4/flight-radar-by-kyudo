@@ -322,7 +322,7 @@ language sql stable security definer set search_path = public as $$
           and public.match_within_monitor_budget(match.id)
       )
   ) ranked
-  where ranked.row_number <= 12
+  where ranked.row_number <= 30
   order by ranked.observed_at desc;
 $$;
 
@@ -472,12 +472,21 @@ returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if new.filters is distinct from old.filters then
     update public.user_matches matches
-    set visible = false,
-        telegram_eligible = false,
+    set visible = decision.still_matches,
+        telegram_eligible = case
+          when decision.still_matches
+            then matches.telegram_eligible
+          else false
+        end,
         updated_at = now()
-    where matches.monitor_id = new.id
-      and matches.visible
-      and not public.offer_matches_monitor_filters(matches.offer_id, new.filters);
+    from (
+      select existing.id,
+             public.offer_matches_monitor_filters(existing.offer_id, new.filters) as still_matches
+      from public.user_matches existing
+      where existing.monitor_id = new.id
+    ) decision
+    where matches.id = decision.id
+      and matches.visible is distinct from decision.still_matches;
   end if;
   return new;
 end;
@@ -659,7 +668,7 @@ begin
              row_number() over (partition by offer_id order by observed_at desc, id desc) as row_number
       from public.offer_price_history
     ) ranked
-    where row_number > 20 or observed_at < now() - interval '30 days'
+    where row_number > 30 or observed_at < now() - interval '30 days'
   );
   get diagnostics history_deleted = row_count;
   delete from public.user_matches match

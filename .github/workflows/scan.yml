@@ -47,16 +47,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          MAX_STANDARD_QUERIES: "240"
+          MAX_STANDARD_QUERIES: "800"
           MAX_FIRST_QUERIES: "12"
-          MAX_STANDARD_CEILING: "400"
+          MAX_STANDARD_CEILING: "800"
           MAX_FIRST_CEILING: "40"
           GOOGLE_REQUEST_DELAY_SECONDS: "1.5"
           MAX_SCAN_RUNTIME_SECONDS: "3000"
           SCAN_PROGRESS_EVERY: "5"
-          GOOGLE_BROWSER_QUERY_LIMIT: ${{ inputs.full_queue_scan == true && '400' || '80' }}
+          GOOGLE_BROWSER_QUERY_LIMIT: ${{ inputs.full_queue_scan == true && '800' || '80' }}
           FULL_QUEUE_SCAN: ${{ inputs.full_queue_scan == true && 'true' || 'false' }}
-          FULL_QUEUE_STANDARD_LIMIT: "400"
+          FULL_QUEUE_STANDARD_LIMIT: "800"
           FULL_QUEUE_FIRST_LIMIT: "40"
           FORCE_SCAN: ${{ (inputs.force_scan == true || inputs.full_queue_scan == true) && 'true' || 'false' }}
           RESERVED_RUN_ID: ${{ inputs.reserved_run_id || '' }}

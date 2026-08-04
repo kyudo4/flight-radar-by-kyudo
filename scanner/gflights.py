@@ -237,11 +237,15 @@ def cheapest_picks(flights, priority_codes, max_options=3):
     candidates = [_best_value(group) for group in by_airline.values()]
     candidates.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
                                    f["stops"] if f["stops"] is not None else 9))
-    picks = candidates[:max_options]
     priorities = [f for f in candidates if f["airline"] in priority_codes]
-    if priorities:
-        best_priority = min(priorities, key=lambda f: (f["price_pln"],
-                                                       f["duration_h"] or 999))
-        if best_priority not in picks:
-            picks.append(best_priority)
+    non_priorities = [f for f in candidates if f["airline"] not in priority_codes]
+    # The source query already returns all visible Google cards. This ordering
+    # makes the scanner process the requested priority carriers first, so a
+    # later CAPTCHA or runtime limit cannot systematically skip them.
+    priorities.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
+                                   f["stops"] if f["stops"] is not None else 9))
+    non_priorities.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
+                                       f["stops"] if f["stops"] is not None else 9))
+    priority_picks = priorities[:max_options]
+    picks = priority_picks + non_priorities[:max(0, max_options - len(priority_picks))]
     return picks

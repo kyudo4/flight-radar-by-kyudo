@@ -404,31 +404,26 @@ def _outbound_candidates(cards, maximum=3):
 def _verify_one_way_cards(page, url, cards, maximum=3):
     """Verify a small set of one-way cards through an exact itinerary link.
 
-    The initial Google result URL is not enough for an alert. Re-open only the
-    most useful cards, select each one, and keep it only when Google exposes a
-    booking URL different from the generic search page. The bounded picker is
-    deliberately limited so a parser fallback cannot turn into an unbounded
-    browser crawl.
+    Re-open only the most useful cards. An exact booking URL is useful when
+    Google exposes one, but the rendered Google card itself is sufficient for
+    an alert, so a generic Google URL is retained as a fallback.
     """
     verified = []
     for card in _outbound_candidates(cards, maximum=maximum):
         _load_cards(page, url)
-        if not _click_card(page, card.get("_label", "")):
-            continue
-        exact_link = _selected_itinerary_link(page, url)
-        if not exact_link:
-            continue
+        clicked = _click_card(page, card.get("_label", ""))
+        exact_link = _selected_itinerary_link(page, url) if clicked else ""
         item = dict(card)
         item.pop("_label", None)
         item.update({
             "round_trip_verified": True,
-            "purchase_link_verified": True,
+            "purchase_link_verified": bool(exact_link),
             "outbound_duration_h": card["duration_h"],
             "outbound_stops": card["stops"],
             "return_duration_h": None,
             "return_stops": None,
             "return_departure": "",
-            "link": exact_link,
+            "link": exact_link or url,
         })
         verified.append(item)
     return verified
@@ -483,16 +478,11 @@ def fetch_rendered(url, return_date=None):
             # the saved URL belongs to this exact inbound option.
             try:
                 _load_cards(page, return_url, returning=True)
-                if not _click_card(page, inbound["_label"]):
-                    continue
-                exact_link = _selected_itinerary_link(page, return_url)
+                clicked = _click_card(page, inbound["_label"])
+                exact_link = _selected_itinerary_link(page, return_url) if clicked else ""
             except (BrowserBlockedError, BrowserCapacityError):
                 raise
             except Exception:
-                continue
-            if not exact_link:
-                # A return card without a selected-itinerary URL is not a
-                # purchase-verifiable result. Do not publish it as exact.
                 continue
             airlines = outbound["airline_name"]
             if inbound["airline_name"].lower() not in airlines.lower():
@@ -505,13 +495,13 @@ def fetch_rendered(url, return_date=None):
                 "departure": outbound["departure"],
                 "aircraft": "",
                 "round_trip_verified": True,
-                "purchase_link_verified": True,
+                "purchase_link_verified": bool(exact_link),
                 "outbound_duration_h": outbound["duration_h"],
                 "outbound_stops": outbound["stops"],
                 "return_duration_h": inbound["duration_h"],
                 "return_stops": inbound["stops"],
                 "return_departure": inbound["departure"],
-                "link": exact_link,
+                "link": exact_link or return_url or url,
             })
     if not combined:
         # Once Google has opened the returning-flight view, a missing exact

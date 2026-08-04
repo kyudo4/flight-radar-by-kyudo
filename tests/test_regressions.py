@@ -498,13 +498,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         flight["return_stops"] = 2
         self.assertFalse(scanner.quality(flight, filters))
 
-    def test_round_trip_quality_requires_exact_purchase_link(self):
+    def test_round_trip_quality_requires_the_return_leg_but_not_purchase_link(self):
         flight = {
             "round_trip_verified": True,
             "outbound_duration_h": 12, "return_duration_h": 12,
             "outbound_stops": 1, "return_stops": 1,
         }
-        self.assertFalse(scanner.quality(flight, {
+        self.assertTrue(scanner.quality(flight, {
             "trip_type": "round_trip", "max_duration_h": 22, "max_stops": 1,
         }))
 
@@ -564,7 +564,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             {"status": "partial", "blocked": False, "standard_limit": 160, "first_limit": 8},
         ]):
             increased = scanner.adaptive_query_limits()
-            self.assertEqual(increased, {"standard": 240, "first": 12})
+            self.assertEqual(increased, {"standard": 800, "first": 12})
 
         with patch.object(scanner, "api", side_effect=RuntimeError("history unavailable")):
             self.assertEqual(scanner.adaptive_query_limits(), {"standard": 60, "first": 4})
@@ -681,7 +681,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         offer = {"price_pln": 4950, "tags": []}
         monitor = {"filters": {"budget_pln": 6000},
                    "telegram_rules": {"min_stars": 3, "drop_percent": 10, "immediate_new_low": True}}
-        with patch.object(scanner, "telegram") as telegram:
+        with patch.object(scanner, "telegram") as telegram, patch.object(scanner, "api"):
             self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
         telegram.assert_not_called()
 
@@ -838,6 +838,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         ]
         picks = gflights.cheapest_picks(flights, {"SQ"}, max_options=3)
         self.assertIn("SQ", {flight["airline"] for flight in picks})
+        self.assertEqual(picks[0]["airline"], "SQ")
 
     def test_unknown_duration_or_stops_is_rejected(self):
         filters = {"max_duration_h": 24, "max_stops": 2}
@@ -1311,7 +1312,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260804-6', html)
+        self.assertIn('app.js?v=20260804-7', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1389,7 +1390,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('cron: "17 */6 * * *"', workflow)
         self.assertIn('cron: "47 * * * *"', workflow)
         readme = (ROOT / "README.md").read_text()
-        self.assertIn("aż do 400 + 40", readme)
+        self.assertIn("800 + 40", readme)
         self.assertIn("cogodzinny retry", readme)
 
     def test_telegram_feedback_has_fast_separate_workflow(self):
@@ -1506,7 +1507,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         app_js = (ROOT / "site" / "app.js").read_text()
         function = (ROOT / "supabase" / "functions" / "admin-scan" / "index.ts").read_text()
         workflow = (ROOT / ".github" / "workflows" / "scan.yml").read_text()
-        self.assertIn('id="scanNowButton"', html)
+        self.assertIn('id="scanDueButton"', html)
+        self.assertIn('id="scanFullButton"', html)
         self.assertIn('id="scanNowMessage"', html)
         self.assertIn('requestImmediateScan', app_js)
         self.assertIn("functions/v1/admin-scan", app_js)
@@ -1516,11 +1518,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("/actions/workflows/${workflow}/dispatches", function)
         self.assertIn("reserve_scan_slot", function)
         self.assertIn("reserved_run_id", function)
+        self.assertIn("full_queue_scan", function)
         self.assertIn("run_id: reservedRun", function)
         self.assertNotIn("'Access-Control-Allow-Origin': '*'", function)
         self.assertIn("workflow_dispatch", workflow)
         self.assertIn("reserved_run_id:", workflow)
         self.assertIn("FORCE_SCAN", workflow)
+        self.assertIn("FULL_QUEUE_SCAN", workflow)
 
     def test_supabase_functions_have_a_pinned_deployment_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "supabase-functions.yml").read_text()
@@ -1548,16 +1552,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260804-6', html)
-        self.assertIn('styles.css?v=20260803-11', html)
+        self.assertIn('app.js?v=20260804-7', html)
+        self.assertIn('styles.css?v=20260804-12', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
         app = (ROOT / "site" / "app.js").read_text()
         self.assertIn('rpc("offer_price_history_for_user"', app)
-        self.assertIn("at most 12 rows per offer", app)
+        self.assertIn("at most 30 rows per offer", app)
         migration = (ROOT / "supabase" / "migrations" / "20260803000100_final_audit_hardening.sql").read_text()
         self.assertIn("offer_price_history_for_user", migration)
-        self.assertIn("row_number <= 12", migration)
+        self.assertIn("row_number <= 30", (ROOT / "supabase" / "migrations" / "20260804000600_scan_alert_policy_history.sql").read_text())
 
     def test_latest_migration_invalidates_old_matches_after_filter_edits(self):
         migration = (ROOT / "supabase" / "migrations" / "20260803000200_monitor_consistency_and_access.sql").read_text()
@@ -1570,14 +1574,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("hide_monitor_matches_on_filter_change", schema)
 
     def test_filter_edits_keep_matches_that_still_fit_the_new_monitor(self):
-        migration = (ROOT / "supabase" / "migrations" / "20260804000500_preserve_matching_monitor_matches.sql").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260804000600_scan_alert_policy_history.sql").read_text()
         schema = (ROOT / "supabase" / "schema.sql").read_text()
         for source in (migration, schema):
             self.assertIn("offer_matches_monitor_filters", source)
-            self.assertIn("not public.offer_matches_monitor_filters(matches.offer_id, new.filters)", source)
-            self.assertIn("offer.origin", source)
-            self.assertIn("offer.destination", source)
-            self.assertIn("offer.travel_date", source)
+            self.assertIn("matches.visible is distinct from decision.still_matches", source)
+        for field in ("offer.origin", "offer.destination", "offer.travel_date"):
+            self.assertIn(field, schema)
         self.assertNotIn(
             "where monitor_id = new.id\n      and visible;",
             migration,
@@ -1587,9 +1590,10 @@ class FlightRadarRegressionTests(unittest.TestCase):
         source = (ROOT / "scanner" / "gflights.py").read_text()
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn('"purchase_link_verified": bool(fl.get("purchase_link_verified", False))', source)
-        self.assertIn('flight.get("purchase_link_verified") is not True', scanner_source)
+        self.assertIn('source_is_google', scanner_source)
+        self.assertNotIn('not allow_unverified and flight.get("purchase_link_verified")', scanner_source)
 
-    def test_unverified_one_way_never_sends_telegram_alert(self):
+    def test_google_one_way_without_purchase_link_can_send_telegram_alert(self):
         match = {"id": "match-unverified", "stars": 5, "last_notified_price": None,
                  "telegram_eligible": True, "new_airline": True}
         offer = {"price_pln": 3500, "tags": [], "route": "POZ → BKK",
@@ -1597,11 +1601,11 @@ class FlightRadarRegressionTests(unittest.TestCase):
                  "travel_date": "2026-09-02", "link": "https://www.google.com/travel/flights",
                  "raw": {"purchase_link_verified": False}}
         monitor = {"filters": {"budget_pln": 5000}, "telegram_rules": {"drop_percent": 10}}
-        with patch.object(scanner, "telegram") as telegram:
-            self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
-        telegram.assert_not_called()
+        with patch.object(scanner, "telegram") as telegram, patch.object(scanner, "api"):
+            self.assertTrue(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
+        telegram.assert_called_once()
 
-    def test_unverified_google_candidate_is_verified_before_alert(self):
+    def test_google_candidate_can_alert_without_browser_purchase_verification(self):
         monitor = {"id": "monitor-verify", "user_id": "user-1",
                    "filters": {"budget_pln": 5000, "max_duration_h": 24, "max_stops": 1},
                    "telegram_rules": {"drop_percent": 10}}
@@ -1609,8 +1613,6 @@ class FlightRadarRegressionTests(unittest.TestCase):
         flight = {"airline": "QR", "airline_name": "Qatar Airways", "price_pln": 4000,
                   "duration_h": 14, "stops": 1, "departure": "10:00",
                   "purchase_link_verified": False}
-        verified = {**flight, "link": "https://www.google.com/travel/flights/booking?selected=1",
-                    "purchase_link_verified": True}
         saved_match = {}
 
         def fake_api(method, path, body=None, params=None):
@@ -1624,12 +1626,12 @@ class FlightRadarRegressionTests(unittest.TestCase):
             return []
 
         with patch.object(scanner, "api", side_effect=fake_api), \
-             patch.object(scanner.gflights, "verify_purchase_links", return_value=[verified]) as verify, \
+             patch.object(scanner.gflights, "verify_purchase_links") as verify, \
              patch.object(scanner, "telegram", return_value={"ok": True}):
             added, sent = scanner.process_candidate(monitor, task, flight, previous=[])
         self.assertEqual((added, sent), (1, 1))
         self.assertTrue(saved_match["telegram_eligible"])
-        verify.assert_called_once_with("POZ", "BKK", "2026-09-02", seat="business", return_date=None)
+        verify.assert_not_called()
 
     def test_rendered_google_duration_can_recover_a_fare_rejected_by_server_payload(self):
         monitor = {"id": "monitor-duration-recovery", "user_id": "user-1",

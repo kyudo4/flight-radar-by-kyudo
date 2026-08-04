@@ -408,9 +408,9 @@
       if (offerIds.length) {
         let { data: historyRows, error: historyError } = await client.rpc("offer_price_history_for_user", { p_offer_ids: offerIds });
         // Compatibility fallback while the additive database migration is
-        // rolling out. The RPC keeps at most 12 rows per offer, unlike the
+        // rolling out. The RPC keeps at most 30 rows per offer, unlike the
         // old global limit which favored the most frequently changing fares.
-        if (historyError) ({ data: historyRows, error: historyError } = await client.from("offer_price_history").select("offer_id,price_pln,observed_at").in("offer_id", offerIds).order("observed_at", { ascending: false }).limit(480));
+        if (historyError) ({ data: historyRows, error: historyError } = await client.from("offer_price_history").select("offer_id,price_pln,observed_at").in("offer_id", offerIds).order("observed_at", { ascending: false }).limit(600));
         if (!historyError) for (const row of historyRows || []) (priceHistory[row.offer_id] ||= []).push(row);
       }
       const byId = new Map(offerRows.map(offer => [offer.id, offer]));
@@ -524,7 +524,8 @@
     document.querySelectorAll("[data-action='toggle-user']").forEach(btn => btn.onclick = async () => { const next = btn.dataset.status === "active" ? "suspended" : "active"; const result = await client.rpc("set_profile_status", { target_id: btn.dataset.user, next_status: next }); if (result.error || result.data !== true) alert(result.error?.message || "Nie zmieniono statusu."); else await loadAdmin(); });
     document.querySelectorAll("[data-action='delete-user']").forEach(btn => btn.onclick = async () => { if (!confirm("Usunąć konto, jego monitory i alerty? Tego nie można cofnąć.")) return; const result = await client.rpc("admin_delete_profile", { target_id: btn.dataset.user }); if (result.error || result.data !== true) alert(result.error?.message || "Nie usunięto konta."); else await loadAdmin(); });
     $("inviteButton").onclick = createInvite;
-    $("scanNowButton").onclick = requestImmediateScan;
+    $("scanDueButton").onclick = () => requestImmediateScan(false);
+    $("scanFullButton").onclick = () => requestImmediateScan(true);
     await loadScanStatus();
   }
   const SCAN_STATUS_LABELS = { queued: "W kolejce", running: "W toku", ok: "OK", partial: "Częściowy", blocked: "Zablokowany", error: "Błąd" };
@@ -532,20 +533,20 @@
   const scanStatusClass = value => value === "ok" ? "active" : value === "running" || value === "queued" ? "pending" : "suspended";
   const scanErrorDetails = value => value ? `<details class="scan-error-details"><summary>Pokaż szczegóły techniczne</summary><div>${esc(value)}</div></details>` : "";
   async function loadScanStatus() { const { data, error } = await client.from("scan_runs").select("id,started_at,finished_at,query_count,standard_limit,first_limit,blocked,offer_count,status,error").order("started_at", { ascending: false }).limit(8); if (error) { $("scanStatus").textContent = "Brak danych o skanach."; return null; } const rows = data || [], latest = rows[0]; $("scanStatus").innerHTML = latest ? `<strong>Ostatni skan: ${esc(scanStatusLabel(latest.status))}</strong> · ${esc(dateTimeFmt(latest.started_at))} · zapytań: ${latest.query_count || 0} · ofert: ${latest.offer_count || 0}${scanErrorDetails(latest.error)}` : "Brak uruchomionych skanów."; $("scanHistory").innerHTML = rows.length ? `<h3>Historia skanów</h3>${rows.map(row => `<div class="scan-row"><span class="status-${scanStatusClass(row.status)}">${esc(scanStatusLabel(row.status))}</span><span>${esc(dateTimeFmt(row.started_at))}</span><span>${row.query_count || 0} zapytań · ${row.offer_count || 0} ofert</span>${scanErrorDetails(row.error)}</div>`).join("")}` : ""; return latest; }
-  async function requestImmediateScan() {
-    const button = $("scanNowButton"), output = $("scanNowMessage");
-    button.disabled = true; output.textContent = "Uruchamianie skanu…"; output.className = "message";
+  async function requestImmediateScan(fullQueueScan = false) {
+    const button = $(fullQueueScan ? "scanFullButton" : "scanDueButton"), output = $("scanNowMessage");
+    button.disabled = true; output.textContent = fullQueueScan ? "Uruchamianie pełnej kolejki…" : "Uruchamianie zaległych skanów…"; output.className = "message";
     try {
       const { data: sessionData, error: sessionError } = await client.auth.getSession();
       if (sessionError || !sessionData.session?.access_token) throw new Error("Sesja administratora wygasła. Odśwież stronę.");
       const response = await fetch(`${cfg.supabaseUrl}/functions/v1/admin-scan`, {
         method: "POST",
         headers: { "Content-Type": "application/json", apikey: cfg.supabaseAnonKey, Authorization: `Bearer ${sessionData.session.access_token}` },
-        body: "{}"
+        body: JSON.stringify({ full_queue_scan: fullQueueScan })
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || "Nie udało się uruchomić skanu.");
-      output.textContent = "Skan jest w kolejce. Status będzie aktualizowany automatycznie."; output.className = "message good";
+      output.textContent = fullQueueScan ? "Pełny skan kolejki jest w kolejce. Status będzie aktualizowany automatycznie." : "Zaległe skany są w kolejce. Status będzie aktualizowany automatycznie."; output.className = "message good";
       loadScanStatus();
       pollScanStatus(body.run_id || null);
     } catch (error) {

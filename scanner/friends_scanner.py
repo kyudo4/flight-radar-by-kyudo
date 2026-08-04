@@ -21,11 +21,11 @@ import telegram_io
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
-INITIAL_STANDARD = max(1, min(1000, int(os.environ.get("MAX_STANDARD_QUERIES", "240"))))
+INITIAL_STANDARD = max(1, min(1000, int(os.environ.get("MAX_STANDARD_QUERIES", "800"))))
 INITIAL_FIRST = max(1, min(100, int(os.environ.get("MAX_FIRST_QUERIES", "12"))))
 MAX_STANDARD = INITIAL_STANDARD
 MAX_FIRST = INITIAL_FIRST
-STANDARD_CEILING = max(INITIAL_STANDARD, min(1000, int(os.environ.get("MAX_STANDARD_CEILING", "400"))))
+STANDARD_CEILING = max(INITIAL_STANDARD, min(1000, int(os.environ.get("MAX_STANDARD_CEILING", "800"))))
 FIRST_CEILING = max(INITIAL_FIRST, min(100, int(os.environ.get("MAX_FIRST_CEILING", "24"))))
 STANDARD_STEP = max(1, min(200, int(os.environ.get("QUERY_RAMP_STANDARD_STEP", "40"))))
 FIRST_STEP = max(1, min(50, int(os.environ.get("QUERY_RAMP_FIRST_STEP", "2"))))
@@ -37,7 +37,7 @@ MAX_MONITOR_DATE_WINDOW_DAYS = 14
 SCAN_INTERVAL_HOURS = 6
 FORCE_SCAN = os.environ.get("FORCE_SCAN", "false").lower() == "true"
 FULL_QUEUE_SCAN = os.environ.get("FULL_QUEUE_SCAN", "false").lower() == "true"
-FULL_QUEUE_STANDARD_LIMIT = max(1, min(1000, int(os.environ.get("FULL_QUEUE_STANDARD_LIMIT", "400"))))
+FULL_QUEUE_STANDARD_LIMIT = max(1, min(1000, int(os.environ.get("FULL_QUEUE_STANDARD_LIMIT", "800"))))
 FULL_QUEUE_FIRST_LIMIT = max(1, min(100, int(os.environ.get("FULL_QUEUE_FIRST_LIMIT", "40"))))
 PROCESS_TELEGRAM_ONLY = os.environ.get("PROCESS_TELEGRAM_ONLY", "false").lower() == "true"
 RESERVED_RUN_ID = os.environ.get("RESERVED_RUN_ID", "").strip()
@@ -406,11 +406,16 @@ def adaptive_query_limits():
     if not recent:
         return limits
     latest = recent[0]
-    limits["standard"] = max(STANDARD_FLOOR, min(STANDARD_CEILING, int(latest.get("standard_limit") or INITIAL_STANDARD)))
-    limits["first"] = max(FIRST_FLOOR, min(FIRST_CEILING, int(latest.get("first_limit") or INITIAL_FIRST)))
+    latest_standard = int(latest.get("standard_limit") or INITIAL_STANDARD)
+    latest_first = int(latest.get("first_limit") or INITIAL_FIRST)
     if latest.get("blocked") or latest.get("status") == "blocked":
-        return {"standard": max(STANDARD_FLOOR, limits["standard"] // 2),
-                "first": max(FIRST_FLOOR, limits["first"] // 2)}
+        return {"standard": max(STANDARD_FLOOR, min(STANDARD_CEILING, latest_standard // 2)),
+                "first": max(FIRST_FLOOR, min(FIRST_CEILING, latest_first // 2))}
+    # A deliberate operator increase in the workflow must take effect even
+    # when the previous run stored the old, lower limit. A blocked run uses
+    # the safety branch above and halves its last known limit instead.
+    limits["standard"] = max(STANDARD_FLOOR, min(STANDARD_CEILING, max(INITIAL_STANDARD, latest_standard)))
+    limits["first"] = max(FIRST_FLOOR, min(FIRST_CEILING, max(INITIAL_FIRST, latest_first)))
     healthy = [row for row in recent[:3] if row.get("status") == "ok" and not row.get("blocked")]
     if len(healthy) == 3:
         limits["standard"] = min(STANDARD_CEILING, limits["standard"] + STANDARD_STEP)
@@ -607,9 +612,6 @@ def quality(flight, filters, allow_unverified=False):
     if trip == "round_trip" and not flight.get("round_trip_verified", False) and not allow_unverified:
         # A round-trip result without a confirmed inbound leg cannot be
         # proven to satisfy the same time/stop rules in both directions.
-        return False
-    if trip == "round_trip" and not allow_unverified and flight.get("purchase_link_verified") is not True:
-        # A generic Google search URL is not sufficient for a two-way alert.
         return False
     raw_max_duration = filters.get("max_duration_h")
     if raw_max_duration in (None, ""):
@@ -974,7 +976,8 @@ def fetch_preferences(user_id):
 def save_offer(task, flight):
     trip_type_value = task.get("trip_type") or ("round_trip" if task.get("return_date") else "one_way")
     tags = list(flight.get("tags") or [])
-    verified = purchase_link_verified(flight) and (
+    source_is_google = "google" in str(flight.get("source") or "Google Flights").lower()
+    verified = source_is_google and (
         trip_type_value == "one_way" or bool(flight.get("round_trip_verified", False))
     )
     if not verified:
@@ -982,7 +985,7 @@ def save_offer(task, flight):
         if pending_tag not in tags:
             tags.append(pending_tag)
     verification_status = "verified" if verified else "pending_verification"
-    verification_note = "" if verified else "Nie potwierdzono jeszcze przejścia do dokładnej strony rezerwacji"
+    verification_note = "" if verified else "Oferta nie pochodzi z potwierdzonego odczytu Google Flights"
     payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "return_date": task.get("return_date"), "trip_type": trip_type_value, "cabin": task["cabin"].upper().replace("-", "_"), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": tags, "verification_status": verification_status, "verification_note": verification_note, "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
     try:
         rows = api("POST", "flight_offers", body=payload, params={"on_conflict": "fingerprint"})
@@ -1105,7 +1108,8 @@ def send_due_alert(match, offer, monitor, connection):
     stars = match["stars"]
     if not connection:
         return False
-    if not purchase_link_verified(offer.get("raw") or offer):
+    source_is_google = "google" in str(offer.get("source") or "Google Flights").lower()
+    if not source_is_google:
         return False
     if "Powrót do potwierdzenia" in (offer.get("tags") or []):
         return False
@@ -1156,8 +1160,6 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     return_date = task.get("return_date")
     trip_type_value = task.get("trip_type") or ("round_trip" if return_date else "one_way")
     connection = api("GET", "telegram_connections", params={"user_id": "eq." + monitor["user_id"], "select": "chat_id"})
-    if connection:
-        flight = verified_candidate(flight, task, verification_cache)
     # Re-apply the two-leg quality rules after the rendered picker has had a
     # chance to provide separate outbound/return details.
     if not quality(flight, filters):
@@ -1209,9 +1211,10 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     is_new_low = bool(current_price is not None and (previous_min is None or current_price < previous_min))
     is_new_airline = bool(airline and airline not in route_airlines)
     round_trip_verified = "Powrót do potwierdzenia" not in (offer.get("tags") or [])
-    if trip_type_value == "round_trip" and flight.get("purchase_link_verified") is not True:
-        round_trip_verified = False
-    verified_for_alert = purchase_link_verified(flight)
+    source_is_google = "google" in str(flight.get("source") or "Google Flights").lower()
+    verified_for_alert = source_is_google and (
+        trip_type_value == "one_way" or bool(flight.get("round_trip_verified", False))
+    )
     match = {"user_id": monitor["user_id"], "monitor_id": monitor["id"], "offer_id": offer["id"], "stars": stars,
              "visible": True,
              "telegram_eligible": verified_for_alert and round_trip_verified and (is_new_low or is_new_airline),

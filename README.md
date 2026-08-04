@@ -147,7 +147,7 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 ## Limit skanera
 
 Scheduler deduplikuje identyczne zapytania użytkowników. Cztery przebiegi na dobę
-startują od maksymalnie 240 zapytań standardowych i 12 First na przebieg. Pozycje kolejki
+startują od maksymalnie 800 zapytań standardowych i 12 First na przebieg. Pozycje kolejki
 są wybierane rotacyjnie między monitorami, żeby jeden użytkownik nie zablokował
 pozostałych. W puli standardowej Business, Economy i Premium Economy również
 rotują między sobą; nie ma sztywnego limitu Economy, więc niewykorzystane miejsca
@@ -155,8 +155,10 @@ przechodzą do klas, które mają zadania. Identyczne zadania są wykonywane tyl
 Kolejka jest stronicowana,
 więc duża liczba monitorów nie ucina jej po pierwszych 20 000 rekordów.
 
-Po trzech zdrowych przebiegach limit automatycznie rośnie o 40 standardowych i 2 First,
-aż do 400 + 40. Po pierwszym 403/429/503, CAPTCHA albo consent wall bieżący przebieg
+Standardowy limit wynosi obecnie 800 zapytań. First nadal ma osobny limit, który rośnie
+ostrożnie do 40. Przycisk administratora „Uruchom zaległe skany” wymusza tylko oczekujące
+pozycje, a „Przeskanuj pełną kolejkę” przechodzi bieżącą kolejkę w ramach limitu 800 + 40.
+Po pierwszym 403/429/503, CAPTCHA albo consent wall bieżący przebieg
 kończy się natychmiast, a kolejny schodzi co najmniej o połowę (nie ma bezmyślnego
 ponawiania zablokowanego żądania). Historia limitów i blokad jest zapisana w `scan_runs`.
 Opóźnienie między zapytaniami pozostaje włączone. Wartości można zmienić przez
