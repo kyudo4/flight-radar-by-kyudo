@@ -1569,6 +1569,20 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("public.match_within_monitor_budget(match.id)", migration)
         self.assertIn("hide_monitor_matches_on_filter_change", schema)
 
+    def test_filter_edits_keep_matches_that_still_fit_the_new_monitor(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260804000500_preserve_matching_monitor_matches.sql").read_text()
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        for source in (migration, schema):
+            self.assertIn("offer_matches_monitor_filters", source)
+            self.assertIn("not public.offer_matches_monitor_filters(matches.offer_id, new.filters)", source)
+            self.assertIn("offer.origin", source)
+            self.assertIn("offer.destination", source)
+            self.assertIn("offer.travel_date", source)
+        self.assertNotIn(
+            "where monitor_id = new.id\n      and visible;",
+            migration,
+        )
+
     def test_round_trip_server_results_cannot_be_marked_purchase_verified(self):
         source = (ROOT / "scanner" / "gflights.py").read_text()
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
