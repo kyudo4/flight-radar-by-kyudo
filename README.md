@@ -98,6 +98,9 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 - Telegram wysyła wszystkie oferty spełniające filtry monitora — rating
   gwiazdkowy jest informacyjny i nie blokuje alertu. Reguły antyduplikatów,
   nowych linii i ponownego alertu po spadku ceny nadal obowiązują;
+- wynik z lekkiego odczytu Google oraz artykuł RSS mogą być widoczne w panelu
+  jako „Do potwierdzenia”, ale nie wywołują alertu Telegram. Alert wymaga
+  jawnego potwierdzenia dokładnego linku rezerwacji przez picker ofert;
 - alert o nowej najniższej cenie jest zawsze włączony i nie jest osobnym
   ustawieniem monitora;
 - cena jest zapisywana w historii, a oferta bez potwierdzenia przez 24 godziny

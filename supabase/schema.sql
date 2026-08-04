@@ -86,7 +86,7 @@ create table public.flight_offers (
   departure text,
   aircraft text,
   tags jsonb not null default '[]'::jsonb,
-  verification_status text not null default 'verified' check (verification_status in ('verified', 'pending_return', 'stale')),
+  verification_status text not null default 'verified' check (verification_status in ('verified', 'pending_return', 'pending_verification', 'stale')),
   verification_note text not null default '',
   link text not null default '',
   raw jsonb not null default '{}'::jsonb,

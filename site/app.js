@@ -460,7 +460,7 @@
     const stops = value => value == null || value === "" || !Number.isFinite(Number(value)) ? "? przes." : (Number(value) === 0 ? "bez przesiadek" : `${Number(value)} przes.`);
     const isVerifiedRoundTrip = o.return_date && raw.round_trip_verified && raw.return_duration_h != null;
     const stale = isOfferStale(o);
-    const tags = [...(o.tags || []), ...(stale ? ["Cena niepotwierdzona"] : []), ...(o.verification_status === "pending_return" ? ["Powrót do potwierdzenia"] : [])].filter((tag, index, all) => all.indexOf(tag) === index).map(tag => `<span class="tag">${esc(tag)}</span>`).join("");
+    const tags = [...(o.tags || []), ...(stale ? ["Cena niepotwierdzona"] : []), ...(o.verification_status === "pending_return" ? ["Powrót do potwierdzenia"] : []), ...(o.verification_status === "pending_verification" ? ["Do potwierdzenia"] : [])].filter((tag, index, all) => all.indexOf(tag) === index).map(tag => `<span class="tag">${esc(tag)}</span>`).join("");
     const dates = o.return_date ? `${dateFmt(o.travel_date)} → ${dateFmt(o.return_date)}` : dateFmt(o.travel_date);
     const journeyRows = isVerifiedRoundTrip
       ? `<div class="offer-info-row"><span>Wylot</span><strong>${esc(leg(raw.outbound_duration_h))} · ${esc(stops(raw.outbound_stops))}</strong></div><div class="offer-info-row"><span>Powrót</span><strong>${esc(leg(raw.return_duration_h))} · ${esc(stops(raw.return_stops))}</strong></div>`

@@ -401,23 +401,48 @@ def _outbound_candidates(cards, maximum=3):
     return selected
 
 
+def _verify_one_way_cards(page, url, cards, maximum=3):
+    """Verify a small set of one-way cards through an exact itinerary link.
+
+    The initial Google result URL is not enough for an alert. Re-open only the
+    most useful cards, select each one, and keep it only when Google exposes a
+    booking URL different from the generic search page. The bounded picker is
+    deliberately limited so a parser fallback cannot turn into an unbounded
+    browser crawl.
+    """
+    verified = []
+    for card in _outbound_candidates(cards, maximum=maximum):
+        _load_cards(page, url)
+        if not _click_card(page, card.get("_label", "")):
+            continue
+        exact_link = _selected_itinerary_link(page, url)
+        if not exact_link:
+            continue
+        item = dict(card)
+        item.pop("_label", None)
+        item.update({
+            "round_trip_verified": True,
+            "purchase_link_verified": True,
+            "outbound_duration_h": card["duration_h"],
+            "outbound_stops": card["stops"],
+            "return_duration_h": None,
+            "return_stops": None,
+            "return_departure": "",
+            "link": exact_link,
+        })
+        verified.append(item)
+    return verified
+
+
 def fetch_rendered(url, return_date=None):
     """Return normalized one-way or fully verified round-trip cards."""
     page = _page()
     outbound_cards = _load_cards(page, url)
     if not return_date:
-        for card in outbound_cards:
-            card.pop("_label", None)
-            card.update({
-                "round_trip_verified": True,
-                "outbound_duration_h": card["duration_h"],
-                "outbound_stops": card["stops"],
-                "return_duration_h": None,
-                "return_stops": None,
-                "return_departure": "",
-                "link": url,
-            })
-        return outbound_cards
+        verified = _verify_one_way_cards(page, url, outbound_cards)
+        if not verified:
+            raise BrowserParseError("Nie udało się potwierdzić linku rezerwacji dla lotu w jedną stronę")
+        return verified
 
     combined = []
     no_return_flights = False

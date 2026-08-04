@@ -9,7 +9,7 @@ alter table public.flight_offers
   drop constraint if exists flight_offers_verification_status_check;
 alter table public.flight_offers
   add constraint flight_offers_verification_status_check
-  check (verification_status in ('verified', 'pending_return', 'stale'));
+  check (verification_status in ('verified', 'pending_return', 'pending_verification', 'stale'));
 
 create table if not exists public.offer_price_history (
   id bigint generated always as identity primary key,

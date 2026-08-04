@@ -908,6 +908,20 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertFalse(rss.FEED_STATUS["Test feed"]["ok"])
         self.assertIn("feed offline", rss.FEED_STATUS["Test feed"]["error"])
 
+    def test_rss_emits_each_exact_date_in_an_article(self):
+        monitor = {"id": "rss-monitor", "filters": {
+            "origins": ["GDN"], "destinations": ["BKK"],
+            "from": "2026-09-01", "to": "2026-09-14",
+            "cabins": ["BUSINESS"],
+        }}
+        item = {"title": "Business fare Gdansk Bangkok",
+                "description": "Business 900 EUR 2026-09-03 and 2026-09-10",
+                "link": "https://example.com/deal", "source": "Test feed"}
+        with patch.object(rss, "items", return_value=[item]), patch.object(rss, "FEEDS", [{"name": "Test feed"}]):
+            candidates = rss.candidates([monitor])
+        self.assertEqual([row[4] for row in candidates], ["2026-09-03", "2026-09-10"])
+        self.assertTrue(all(row[1]["purchase_link_verified"] is False for row in candidates))
+
     def test_rss_keeps_detected_first_class_for_multi_cabin_monitor(self):
         monitor = {
             "filters": {
@@ -939,7 +953,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         }]
         monitor = {"id": "monitor-1", "user_id": "user-1", "filters": {"max_duration_h": 24, "max_stops": 2, "budget_pln": 6000},
                    "telegram_rules": {"min_stars": 4, "immediate_new_low": True}}
-        flight = {"airline": "EY", "airline_name": "Etihad", "price_pln": 5000, "duration_h": 12, "stops": 1, "departure": "09:00"}
+        flight = {"airline": "EY", "airline_name": "Etihad", "price_pln": 5000, "duration_h": 12, "stops": 1, "departure": "09:00", "purchase_link_verified": True}
         saved_match = {}
 
         def fake_api(method, path, body=None, params=None):
@@ -978,7 +992,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         }
         task = {"origin": "POZ", "dest": "BKK", "date": "2026-10-05", "cabin": "business", "trip_type": "one_way"}
         flight = {"airline": "QR", "airline_name": "Qatar Airways", "price_pln": 4800,
-                  "duration_h": 14, "stops": 1, "departure": "10:00"}
+                  "duration_h": 14, "stops": 1, "departure": "10:00", "purchase_link_verified": True}
         market = [
             flight,
             {"airline": "EY", "price_pln": 7000, "duration_h": 14, "stops": 1, "departure": "11:00"},
@@ -1024,7 +1038,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         monitor = {"id": "monitor-1", "user_id": "user-1", "filters": {"max_duration_h": 24, "max_stops": 2, "budget_pln": 6000},
                    "telegram_rules": {"min_stars": 4, "immediate_new_low": True}}
         task = {"origin": "POZ", "dest": "BKK", "date": "2026-09-02", "cabin": "business"}
-        flight = {"airline": "QR", "airline_name": "Qatar Airways", "price_pln": 4000, "duration_h": 14, "stops": 1, "departure": "10:00"}
+        flight = {"airline": "QR", "airline_name": "Qatar Airways", "price_pln": 4000, "duration_h": 14, "stops": 1, "departure": "10:00", "purchase_link_verified": True}
         state = {"offer": None, "match": None, "connected": False}
 
         def fake_api(method, path, body=None, params=None):
@@ -1165,7 +1179,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_low_rated_matching_offer_is_still_telegram_eligible(self):
         match = {"id": "match-low", "stars": 1, "telegram_eligible": True,
                  "new_airline": True, "last_notified_price": None}
-        offer = {"price_pln": 4500, "tags": [], "route": "WAW → BKK",
+        offer = {"price_pln": 4500, "tags": [], "route": "WAW → BKK", "purchase_link_verified": True,
                  "cabin": "ECONOMY", "airline_name": "Air China",
                  "travel_date": "2026-10-22", "link": "https://example.com"}
         monitor = {"filters": {"budget_pln": 5000},
@@ -1498,7 +1512,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260804-2', html)
+        self.assertIn('app.js?v=20260804-3', html)
         self.assertIn('styles.css?v=20260803-11', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
@@ -1522,8 +1536,28 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_round_trip_server_results_cannot_be_marked_purchase_verified(self):
         source = (ROOT / "scanner" / "gflights.py").read_text()
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
-        self.assertIn('"purchase_link_verified": bool(fl.get("purchase_link_verified", False)) if return_date else True', source)
+        self.assertIn('"purchase_link_verified": bool(fl.get("purchase_link_verified", False))', source)
         self.assertIn('flight.get("purchase_link_verified") is not True', scanner_source)
+
+    def test_unverified_one_way_never_sends_telegram_alert(self):
+        match = {"id": "match-unverified", "stars": 5, "last_notified_price": None,
+                 "telegram_eligible": True, "new_airline": True}
+        offer = {"price_pln": 3500, "tags": [], "route": "POZ → BKK",
+                 "cabin": "BUSINESS", "airline_name": "Qatar Airways",
+                 "travel_date": "2026-09-02", "link": "https://www.google.com/travel/flights",
+                 "raw": {"purchase_link_verified": False}}
+        monitor = {"filters": {"budget_pln": 5000}, "telegram_rules": {"drop_percent": 10}}
+        with patch.object(scanner, "telegram") as telegram:
+            self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
+        telegram.assert_not_called()
+
+    def test_purchase_verification_is_shown_as_pending_in_schema_and_panel(self):
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260804000200_purchase_verification.sql").read_text()
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn("pending_verification", schema)
+        self.assertIn("pending_verification", migration)
+        self.assertIn('o.verification_status === "pending_verification"', app)
 
     def test_telegram_auth_requires_invite_only_for_new_profiles(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()

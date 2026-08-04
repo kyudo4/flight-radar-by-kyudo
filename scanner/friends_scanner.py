@@ -635,6 +635,16 @@ def budget_ok(flight, filters):
     return float(price) <= budget
 
 
+def purchase_link_verified(flight):
+    """Whether this exact itinerary reached a booking/payment URL.
+
+    A generic Google search URL and an RSS article are leads, not proof of an
+    available purchasable fare. Scanner-produced records must carry an
+    explicit True flag from the rendered itinerary picker.
+    """
+    return flight.get("purchase_link_verified") is True
+
+
 def preference_adjustment(flight, filters, preferences=None, route="", destination="", cabin=""):
     """Translate durable cross-monitor preference signals into a star adjustment."""
     if preferences is None:
@@ -878,14 +888,15 @@ def fetch_preferences(user_id):
 def save_offer(task, flight):
     trip_type_value = task.get("trip_type") or ("round_trip" if task.get("return_date") else "one_way")
     tags = list(flight.get("tags") or [])
-    verified = trip_type_value == "one_way" or (
-        bool(flight.get("round_trip_verified", False))
-        and flight.get("purchase_link_verified") is True
+    verified = purchase_link_verified(flight) and (
+        trip_type_value == "one_way" or bool(flight.get("round_trip_verified", False))
     )
-    if trip_type_value == "round_trip" and not verified and "Powrót do potwierdzenia" not in tags:
-        tags.append("Powrót do potwierdzenia")
-    verification_status = "verified" if verified else "pending_return"
-    verification_note = "" if verification_status == "verified" else "Google nie udostępnił jeszcze szczegółów odcinka powrotnego"
+    if not verified:
+        pending_tag = "Powrót do potwierdzenia" if trip_type_value == "round_trip" else "Do potwierdzenia"
+        if pending_tag not in tags:
+            tags.append(pending_tag)
+    verification_status = "verified" if verified else "pending_verification"
+    verification_note = "" if verified else "Nie potwierdzono jeszcze przejścia do dokładnej strony rezerwacji"
     payload = {"fingerprint": offer_fingerprint(task, flight), "source": flight.get("source") or "Google Flights (cena na żywo)", "route": "%s → %s" % (task["origin"], task["dest"]), "origin": task["origin"], "destination": task["dest"], "travel_date": task["date"], "return_date": task.get("return_date"), "trip_type": trip_type_value, "cabin": task["cabin"].upper().replace("-", "_"), "airline": flight.get("airline", ""), "airline_name": flight.get("airline_name", ""), "price_pln": flight.get("price_pln"), "duration_minutes": round((flight.get("duration_h") or 0) * 60) or None, "stops": flight.get("stops"), "departure": flight.get("departure", ""), "aircraft": flight.get("aircraft", ""), "tags": tags, "verification_status": verification_status, "verification_note": verification_note, "link": flight.get("link", ""), "last_seen_at": datetime.utcnow().isoformat() + "Z", "raw": flight}
     try:
         rows = api("POST", "flight_offers", body=payload, params={"on_conflict": "fingerprint"})
@@ -1008,6 +1019,8 @@ def send_due_alert(match, offer, monitor, connection):
     stars = match["stars"]
     if not connection:
         return False
+    if not purchase_link_verified(offer.get("raw") or offer):
+        return False
     if "Powrót do potwierdzenia" in (offer.get("tags") or []):
         return False
     price = offer.get("price_pln") or 0
@@ -1097,9 +1110,10 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     round_trip_verified = "Powrót do potwierdzenia" not in (offer.get("tags") or [])
     if trip_type_value == "round_trip" and flight.get("purchase_link_verified") is not True:
         round_trip_verified = False
+    verified_for_alert = purchase_link_verified(flight)
     match = {"user_id": monitor["user_id"], "monitor_id": monitor["id"], "offer_id": offer["id"], "stars": stars,
              "visible": True,
-             "telegram_eligible": round_trip_verified and (is_new_low or is_new_airline),
+             "telegram_eligible": verified_for_alert and round_trip_verified and (is_new_low or is_new_airline),
              "new_airline": is_new_airline,
              "min_price_for_user": min(prices) if prices else None}
     # Jeżeli alert nie został jeszcze wysłany (brak połączenia Telegram albo

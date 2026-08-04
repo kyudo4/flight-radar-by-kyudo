@@ -243,5 +243,6 @@ def candidates(monitors):
                     continue
                 for origin in sorted(set(origins) & set(filters.get("origins", []))):
                     for dest in sorted(set(destinations) & set(filters.get("destinations", []))):
-                        out.append((monitor, {"airline": carrier, "airline_name": next((name.title() for name, code in AIRLINES.items() if code == carrier), ""), "price_pln": amount, "duration_h": duration, "stops": stops, "departure": "", "link": item["link"], "source": item["source"], "tags": tags, "title": item["title"], "cabin": cabin}, origin, dest, dates[0]))
+                        for travel_date in dates:
+                            out.append((monitor, {"airline": carrier, "airline_name": next((name.title() for name, code in AIRLINES.items() if code == carrier), ""), "price_pln": amount, "duration_h": duration, "stops": stops, "departure": "", "link": item["link"], "source": item["source"], "tags": tags + ["Do potwierdzenia"], "title": item["title"], "cabin": cabin, "purchase_link_verified": False}, origin, dest, travel_date))
     return out

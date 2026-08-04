@@ -147,9 +147,10 @@ def _fetch_server(origin, dest, date, seat="business", return_date=None, timeout
             "aircraft": fl.get("aircraft", ""),
             "link": url,
             "round_trip_verified": bool(fl.get("round_trip_verified", not bool(return_date))),
-            # The lightweight response is only a search result. It does not
-            # prove that an exact round-trip itinerary has a booking link.
-            "purchase_link_verified": bool(fl.get("purchase_link_verified", False)) if return_date else True,
+            # A lightweight response is only a search result. It does not
+            # prove that this exact itinerary reaches a booking/payment page.
+            # Only the rendered itinerary picker may set this to True.
+            "purchase_link_verified": bool(fl.get("purchase_link_verified", False)),
             "outbound_duration_h": fl.get("outbound_duration_h"),
             "outbound_stops": fl.get("outbound_stops"),
             "return_duration_h": fl.get("return_duration_h"),
@@ -186,6 +187,9 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
             normalized = dict(flight)
             normalized["airline"] = airline_code(normalized.get("airline_name", ""))
             normalized["link"] = normalized.get("link") or url
+            # Never infer payment verification from a generic Google search
+            # URL. Rendered results must explicitly carry the flag.
+            normalized["purchase_link_verified"] = bool(normalized.get("purchase_link_verified", False))
             flights.append(normalized)
         if not flights:
             raise SourceParseError("Awaryjny Chrome nie zwrócił ofert")
