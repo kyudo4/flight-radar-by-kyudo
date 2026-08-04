@@ -110,6 +110,14 @@
   function setupAirportPicker(kind) {
     const suffix = kind === "origins" ? "Origins" : "Destinations";
     const input = $(`monitor${suffix}`), suggestions = $(`monitor${suffix}Suggestions`), selected = $(`monitor${suffix}Selected`);
+    const chooseSuggestion = event => {
+      const option = event.target.closest("[data-airport-code]");
+      if (!option || !suggestions.contains(option)) return;
+      // Select before the input loses focus.  This is important in Brave and
+      // on touch screens, where blur can hide the list before click fires.
+      event.preventDefault();
+      selectAirport(kind, option.dataset.airportCode);
+    };
     input.oninput = () => renderAirportPicker(kind, input.value);
     input.onfocus = () => renderAirportPicker(kind, input.value);
     input.onkeydown = event => {
@@ -119,10 +127,10 @@
       }
     };
     input.onblur = () => window.setTimeout(() => suggestions.classList.add("hidden"), 120);
-    suggestions.onclick = event => {
-      const option = event.target.closest("[data-airport-code]");
-      if (option) selectAirport(kind, option.dataset.airportCode);
-    };
+    // pointerdown covers mouse, touch and pen and runs before blur/click.
+    // Keep click as a compatibility fallback for browsers without Pointer Events.
+    suggestions.onpointerdown = chooseSuggestion;
+    suggestions.onclick = chooseSuggestion;
     selected.onclick = event => {
       const button = event.target.closest("[data-remove-airport]");
       if (!button) return;
