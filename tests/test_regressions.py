@@ -1617,6 +1617,39 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertTrue(saved_match["telegram_eligible"])
         verify.assert_called_once_with("POZ", "BKK", "2026-09-02", seat="business", return_date=None)
 
+    def test_rendered_google_duration_can_recover_a_fare_rejected_by_server_payload(self):
+        monitor = {"id": "monitor-duration-recovery", "user_id": "user-1",
+                   "filters": {"budget_pln": 2000, "max_duration_h": 20, "max_stops": 1},
+                   "telegram_rules": {"drop_percent": 10}}
+        task = {"origin": "WAW", "dest": "BKK", "date": "2026-10-27", "cabin": "economy"}
+        # The server payload has the right fare but an overestimated elapsed
+        # time. Google’s rendered card corrects it to 13 h 35 min.
+        flight = {"airline": "G9", "airline_name": "Air Arabia", "price_pln": 1303,
+                  "duration_h": 22.7, "stops": 1, "departure": "11:45 – 10:25",
+                  "purchase_link_verified": False}
+        verified = {**flight, "duration_h": 13.58, "outbound_duration_h": 13.58,
+                    "link": "https://www.google.com/travel/flights/booking?selected=air-arabia",
+                    "purchase_link_verified": True}
+        saved_match = {}
+
+        def fake_api(method, path, body=None, params=None):
+            if method == "POST" and path == "flight_offers":
+                return [{"id": "offer-duration-recovery", **body}]
+            if method == "POST" and path == "user_matches":
+                saved_match.update(body)
+                return [{"id": "match-duration-recovery", **body}]
+            if method == "GET" and path == "telegram_connections":
+                return [{"chat_id": "123"}]
+            return []
+
+        with patch.object(scanner, "api", side_effect=fake_api), \
+             patch.object(scanner.gflights, "verify_purchase_links", return_value=[verified]) as verify, \
+             patch.object(scanner, "telegram", return_value={"ok": True}):
+            added, sent = scanner.process_candidate(monitor, task, flight, previous=[])
+        self.assertEqual((added, sent), (1, 1))
+        self.assertEqual(saved_match["telegram_eligible"], True)
+        verify.assert_called_once_with("WAW", "BKK", "2026-10-27", seat="economy", return_date=None)
+
     def test_purchase_verification_is_shown_as_pending_in_schema_and_panel(self):
         schema = (ROOT / "supabase" / "schema.sql").read_text()
         migration = (ROOT / "supabase" / "migrations" / "20260804000200_purchase_verification.sql").read_text()

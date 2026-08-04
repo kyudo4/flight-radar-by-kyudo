@@ -681,11 +681,11 @@ def same_verified_offer(candidate, flight):
         actual = candidate.get(key)
         if expected is not None and actual is not None and int(expected) != int(actual):
             return False
-    for key in ("duration_h", "outbound_duration_h", "return_duration_h"):
-        expected = flight.get(key)
-        actual = candidate.get(key)
-        if expected is not None and actual is not None and abs(float(expected) - float(actual)) > 0.35:
-            return False
+    # Google’s initial ds:1 payload can contain the right price, carrier and
+    # flight but calculate the elapsed time from local timestamps without the
+    # airport time-zone correction.  The rendered card is the authoritative
+    # value for duration and the exact itinerary link, so a duration mismatch
+    # is precisely the condition this verification pass is meant to repair.
     return True
 
 
@@ -709,6 +709,26 @@ def verified_candidate(flight, task, verification_cache):
         if same_verified_offer(candidate, flight):
             return {**flight, **candidate, "purchase_link_verified": True}
     return flight
+
+
+def recover_rendered_quality_candidate(flight, task, filters, verification_cache):
+    """Retry a rejected cheap Google result against the rendered card.
+
+    The lightweight payload is normally enough, but an incorrect server-side
+    duration can reject a fare that Google visibly shows within the monitor’s
+    limit.  Only budget-fitting Google results are eligible for this recovery;
+    excluded airlines are never reintroduced by a browser retry.
+    """
+    if budget_ok(flight, filters):
+        airline_text = (flight.get("airline_name") or "").lower()
+        excluded = [str(value).lower() for value in filters.get("excluded_airlines", [])]
+        if not any(value and value in airline_text for value in excluded):
+            source = str(flight.get("source") or "Google Flights").lower()
+            if "google" in source:
+                rendered = verified_candidate(flight, task, verification_cache)
+                if rendered is not flight and quality(rendered, filters):
+                    return rendered
+    return None
 
 
 def preference_adjustment(flight, filters, preferences=None, route="", destination="", cabin=""):
@@ -1114,9 +1134,20 @@ def send_due_alert(match, offer, monitor, connection):
 
 def process_candidate(monitor, task, flight, previous=None, preferences=None, market_prices=None, verification_cache=None):
     filters = monitor.get("filters") or {}
-    if not quality(flight, filters, allow_unverified=True) or not budget_ok(flight, filters):
-        return 0, 0
     verification_cache = verification_cache if verification_cache is not None else {}
+    if not budget_ok(flight, filters):
+        return 0, 0
+    if not quality(flight, filters, allow_unverified=True):
+        # Do not discard a budget-fitting result merely because Google’s
+        # lightweight payload reported a stale/time-zone-distorted duration
+        # or stop count. The rendered card can correct those fields once per
+        # query and remains the source of truth for the final filter decision.
+        recovered = recover_rendered_quality_candidate(
+            flight, task, filters, verification_cache
+        )
+        if recovered is None:
+            return 0, 0
+        flight = recovered
     if previous is None:
         previous = fetch_existing(monitor["id"])
     active_previous = [old for old in previous if old.get("visible", True)]
