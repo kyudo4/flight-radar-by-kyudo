@@ -1021,7 +1021,9 @@ def send_due_alert(match, offer, monitor, connection):
     is_new_airline = bool(match.get("new_airline"))
     same_offer = bool(match.get("_same_offer"))
     pending_unnotified = bool(match.get("_pending_unnotified"))
-    immediate_new_low = bool(rules.get("immediate_new_low", False)) and not same_offer
+    # A new lowest price is always alerted. The setting is intentionally no
+    # longer user-configurable; only duplicate/repeat safeguards still apply.
+    immediate_new_low = not same_offer
     if not is_drop and not is_new_airline and not pending_unnotified and not (is_new_low and immediate_new_low):
         return False
     sent = telegram("sendMessage", {"chat_id": connection["chat_id"], "text": alert_text(offer, stars, match["id"]), "parse_mode": "HTML", "disable_web_page_preview": False, "reply_markup": {"inline_keyboard": [[{"text": "👍 Kupiłbym", "callback_data": "fb|%s|buy" % match["id"]}, {"text": "💸 Za drogo", "callback_data": "fb|%s|expensive" % match["id"]}], [{"text": "🙅 Nie interesuje", "callback_data": "fb|%s|skip" % match["id"]}, {"text": "⏱ Za długo", "callback_data": "fb|%s|toolong" % match["id"]}, {"text": "✈️ Zła linia", "callback_data": "fb|%s|badairline" % match["id"]}]]}})

@@ -302,7 +302,7 @@
     $("monitorDuration").value = f.max_duration_h || ""; $("monitorStops").value = Number.isInteger(f.max_stops) ? f.max_stops : "";
     $("monitorPreferredAirlines").value = (f.preferred_airlines || []).join(", ");
     $("monitorExcludedAirlines").value = (f.excluded_airlines || []).join(", "); $("monitorDirectOnly").checked = Boolean(f.direct_only);
-    $("telegramDrop").value = r.drop_percent || ""; $("telegramImmediate").checked = Boolean(r.immediate_new_low);
+    $("telegramDrop").value = r.drop_percent || "";
     $("formMessage").textContent = ""; updateRoundTripFields(); $("monitorDialog").showModal();
   }
 
@@ -331,7 +331,7 @@
     const excludedAirlines = csv($("monitorExcludedAirlines").value);
     const preferredAirlines = csv($("monitorPreferredAirlines").value);
     const f = { origins, destinations, from, to, trip_type: trip, return_from: trip === "round_trip" ? returnFrom : null, return_to: trip === "round_trip" ? returnTo : null, cabins, cabin: cabins[0], budget_pln: budget, max_duration_h: maxDuration, max_stops: maxStops, preferred_airlines: preferredAirlines, direct_only: $("monitorDirectOnly").checked, excluded_airlines: excludedAirlines };
-    const r = { min_stars: 3, drop_percent: telegramDrop, immediate_new_low: $("telegramImmediate").checked };
+    const r = { min_stars: 3, drop_percent: telegramDrop, immediate_new_low: true };
     const payload = { name, filters: f, app_rules: { min_stars: 1 }, telegram_rules: r, expires_at: f.to || null };
     let result;
     try {

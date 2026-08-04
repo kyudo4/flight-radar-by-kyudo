@@ -757,6 +757,12 @@ begin
     '3'::jsonb,
     true
   );
+  new.telegram_rules := jsonb_set(
+    new.telegram_rules,
+    '{immediate_new_low}',
+    'true'::jsonb,
+    true
+  );
   return new;
 end;
 $$;

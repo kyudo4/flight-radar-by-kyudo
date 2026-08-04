@@ -1000,9 +1000,9 @@ class FlightRadarRegressionTests(unittest.TestCase):
             added, sent = scanner.process_candidate(
                 monitor, task, flight, previous=previous, preferences=[], market_prices=market
             )
-        self.assertEqual((added, sent), (1, 0))
+        self.assertEqual((added, sent), (1, 1))
         self.assertFalse(saved_match["new_airline"])
-        telegram.assert_not_called()
+        telegram.assert_called_once()
 
     def test_source_error_routes_are_limited_to_the_current_streak(self):
         count, routes = scanner.reset_source_error_streak()
@@ -1154,10 +1154,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_telegram_notifications_always_include_all_matching_ratings(self):
         html = (ROOT / "site" / "index.html").read_text()
         app = (ROOT / "site" / "app.js").read_text()
-        self.assertIn("Wszystkie oferty spełniające filtry", html)
-        self.assertIn("Wszystkie oferty spełniające filtry", app)
+        self.assertIn("Ponowne powiadomienie po spadku ceny o (%)", html)
+        self.assertIn("immediate_new_low: true", app)
         self.assertNotIn("telegramStars", html)
         self.assertNotIn("telegramStars", app)
+        self.assertNotIn("telegramImmediate", html)
+        self.assertNotIn("telegramImmediate", app)
+        self.assertNotIn("telegram-all-alerts", html)
 
     def test_low_rated_matching_offer_is_still_telegram_eligible(self):
         match = {"id": "match-low", "stars": 1, "telegram_eligible": True,
@@ -1177,7 +1180,9 @@ class FlightRadarRegressionTests(unittest.TestCase):
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn("normalize_telegram_rules", migration)
         self.assertIn("'{min_stars}'", migration)
+        self.assertIn("'{immediate_new_low}'", migration)
         self.assertIn("min_stars: 3", (ROOT / "site" / "app.js").read_text())
+        self.assertIn("immediate_new_low: true", (ROOT / "site" / "app.js").read_text())
         self.assertNotIn('stars < int(rules.get("min_stars")', scanner_source)
 
     def test_frontend_loads_matches_and_offers_separately(self):
@@ -1493,7 +1498,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260804-1', html)
+        self.assertIn('app.js?v=20260804-2', html)
         self.assertIn('styles.css?v=20260803-11', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):

@@ -1,6 +1,6 @@
 -- Telegram alerts always include every offer that passes the monitor filters.
 -- The old min_stars field remains for compatibility, but is normalized to 3
--- and is no longer used as an alert gate.
+-- and is no longer used as an alert gate. New-low alerts are always enabled.
 
 create or replace function public.normalize_telegram_rules()
 returns trigger language plpgsql set search_path = public as $$
@@ -9,6 +9,12 @@ begin
     coalesce(new.telegram_rules, '{}'::jsonb),
     '{min_stars}',
     '3'::jsonb,
+    true
+  );
+  new.telegram_rules := jsonb_set(
+    new.telegram_rules,
+    '{immediate_new_low}',
+    'true'::jsonb,
     true
   );
   return new;
@@ -24,8 +30,13 @@ create trigger normalize_telegram_rules
 
 update public.monitors
 set telegram_rules = jsonb_set(
-  coalesce(telegram_rules, '{}'::jsonb),
-  '{min_stars}',
-  '3'::jsonb,
+  jsonb_set(
+    coalesce(telegram_rules, '{}'::jsonb),
+    '{min_stars}',
+    '3'::jsonb,
+    true
+  ),
+  '{immediate_new_low}',
+  'true'::jsonb,
   true
 );
