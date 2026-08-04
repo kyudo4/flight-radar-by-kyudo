@@ -39,6 +39,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         app = (ROOT / "site" / "app.js").read_text()
         schema = (ROOT / "supabase" / "schema.sql").read_text()
         migration = (ROOT / "supabase" / "migrations" / "20260804000300_max_monitor_date_window.sql").read_text()
+        legacy_migration = (ROOT / "supabase" / "migrations" / "20260804000400_clamp_legacy_date_windows.sql").read_text()
         self.assertIn("MAX_MONITOR_DATE_WINDOW_DAYS = 14", scanner_source)
         self.assertIn("MAX_MONITOR_DATE_WINDOW_DAYS = 14", app)
         self.assertIn("validate_monitor_date_windows", schema)
@@ -46,6 +47,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("validate_monitor_date_windows", migration)
         self.assertIn("to_date - from_date > 13", migration)
         self.assertIn("return_to_date - return_from_date > 13", migration)
+        self.assertIn("update public.monitors", legacy_migration)
+        self.assertIn("from_date + 13", legacy_migration)
         monitor = {"id": "monitor-too-wide", "filters": {
             "origins": ["POZ"], "destinations": ["BKK"],
             "from": "2026-09-01", "to": "2026-09-15", "cabin": "ECONOMY",
