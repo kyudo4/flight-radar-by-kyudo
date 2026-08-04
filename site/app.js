@@ -286,18 +286,19 @@
     const origins = airportSelections.origins.length;
     const destinations = airportSelections.destinations.length;
     const cabins = document.querySelectorAll("input[name='monitorCabin']:checked").length || 1;
-    if (!from || !to || from > to || !origins || !destinations) { $("monitorQueryEstimate").textContent = ""; return; }
+    const dateWindowHint = "Zakres dat: maksymalnie 14 dni.";
+    if (!from || !to || from > to || !origins || !destinations) { $("monitorQueryEstimate").textContent = dateWindowHint; return; }
     const days = Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1;
     let pairs = days;
     if (trip === "round_trip") {
       const returnFrom = $("monitorReturnFrom")?.value, returnTo = $("monitorReturnTo")?.value;
-      if (!returnFrom || !returnTo || returnFrom > returnTo) { $("monitorQueryEstimate").textContent = "Wybierz zakres powrotu, aby zobaczyć skalę skanu."; return; }
+      if (!returnFrom || !returnTo || returnFrom > returnTo) { $("monitorQueryEstimate").textContent = `Wybierz zakres powrotu, aby zobaczyć skalę skanu. ${dateWindowHint}`; return; }
       pairs = validRoundTripPairCount(from, to, returnFrom, returnTo);
     }
     const total = pairs * origins * destinations * cabins;
     $("monitorQueryEstimate").textContent = total > MAX_MONITOR_COMBINATIONS
       ? `Za dużo kombinacji: ${total.toLocaleString("pl-PL")} (maksymalnie ${MAX_MONITOR_COMBINATIONS.toLocaleString("pl-PL")}). Zawęź lotniska, daty albo klasy.`
-      : `${trip === "round_trip" ? "Kombinacji wylot/powrót" : "Dat do sprawdzenia"}: ${total.toLocaleString("pl-PL")}. Kolejka będzie rotowana między monitorami.`;
+      : `${trip === "round_trip" ? "Kombinacji wylot/powrót" : "Dat do sprawdzenia"}: ${total.toLocaleString("pl-PL")}. Kolejka będzie rotowana między monitorami. ${dateWindowHint}`;
   }
 
   function openMonitorDialog(monitor = null) {

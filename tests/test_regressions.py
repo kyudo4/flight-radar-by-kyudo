@@ -1310,7 +1310,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("const chooseSuggestion = event =>", app)
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
-        self.assertIn('app.js?v=20260804-5', html)
+        self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
+        self.assertIn('app.js?v=20260804-6', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1547,7 +1548,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260804-5', html)
+        self.assertIn('app.js?v=20260804-6', html)
         self.assertIn('styles.css?v=20260803-11', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
