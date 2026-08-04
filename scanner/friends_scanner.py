@@ -592,13 +592,13 @@ def market_observations(task, flights, filters):
     ]
 
 
-def quality(flight, filters):
+def quality(flight, filters, allow_unverified=False):
     trip = trip_type(filters)
-    if trip == "round_trip" and not flight.get("round_trip_verified", False):
+    if trip == "round_trip" and not flight.get("round_trip_verified", False) and not allow_unverified:
         # A round-trip result without a confirmed inbound leg cannot be
         # proven to satisfy the same time/stop rules in both directions.
         return False
-    if trip == "round_trip" and flight.get("purchase_link_verified") is not True:
+    if trip == "round_trip" and not allow_unverified and flight.get("purchase_link_verified") is not True:
         # A generic Google search URL is not sufficient for a two-way alert.
         return False
     raw_max_duration = filters.get("max_duration_h")
@@ -612,13 +612,21 @@ def quality(flight, filters):
     duration_values = [flight.get("outbound_duration_h") or flight.get("duration_h")]
     if trip == "round_trip":
         duration_values.append(flight.get("return_duration_h"))
-    if max_duration is not None and any(value is None or float(value) > max_duration for value in duration_values):
+    if max_duration is not None and any(
+        value is None and not (allow_unverified and trip == "round_trip")
+        or value is not None and float(value) > max_duration
+        for value in duration_values
+    ):
         return False
     max_stops = filters.get("max_stops")
     stops_values = [flight.get("outbound_stops") if flight.get("outbound_stops") is not None else flight.get("stops")]
     if trip == "round_trip":
         stops_values.append(flight.get("return_stops"))
-    if max_stops is not None and any(value is None or int(value) > int(max_stops) for value in stops_values):
+    if max_stops is not None and any(
+        value is None and not (allow_unverified and trip == "round_trip")
+        or value is not None and int(value) > int(max_stops)
+        for value in stops_values
+    ):
         return False
     if filters.get("direct_only") and any(value != 0 for value in stops_values):
         return False
@@ -643,6 +651,54 @@ def purchase_link_verified(flight):
     explicit True flag from the rendered itinerary picker.
     """
     return flight.get("purchase_link_verified") is True
+
+
+def verification_task_key(task):
+    return "|".join(str(task.get(key) or "") for key in (
+        "origin", "dest", "date", "return_date", "cabin"))
+
+
+def same_verified_offer(candidate, flight):
+    """Match a rendered exact itinerary to its lightweight candidate."""
+    if candidate.get("price_pln") != flight.get("price_pln"):
+        return False
+    candidate_airline = airline_identity(candidate)
+    flight_airline = airline_identity(flight)
+    if candidate_airline and flight_airline and candidate_airline != flight_airline:
+        return False
+    for key in ("stops", "outbound_stops", "return_stops"):
+        expected = flight.get(key)
+        actual = candidate.get(key)
+        if expected is not None and actual is not None and int(expected) != int(actual):
+            return False
+    for key in ("duration_h", "outbound_duration_h", "return_duration_h"):
+        expected = flight.get(key)
+        actual = candidate.get(key)
+        if expected is not None and actual is not None and abs(float(expected) - float(actual)) > 0.35:
+            return False
+    return True
+
+
+def verified_candidate(flight, task, verification_cache):
+    """Return the exact rendered match, caching one browser pass per query."""
+    if purchase_link_verified(flight):
+        return flight
+    source = str(flight.get("source") or "Google Flights").lower()
+    if "google" not in source:
+        return flight
+    key = verification_task_key(task)
+    if key not in verification_cache:
+        try:
+            verification_cache[key] = gflights.verify_purchase_links(
+                task["origin"], task["dest"], task["date"],
+                seat=task["cabin"], return_date=task.get("return_date"))
+        except Exception as exc:
+            verification_cache[key] = []
+            log("Nie udało się potwierdzić dokładnej rezerwacji %s: %s" % (key, str(exc)[:160]))
+    for candidate in verification_cache[key]:
+        if same_verified_offer(candidate, flight):
+            return {**flight, **candidate, "purchase_link_verified": True}
+    return flight
 
 
 def preference_adjustment(flight, filters, preferences=None, route="", destination="", cabin=""):
@@ -1046,10 +1102,11 @@ def send_due_alert(match, offer, monitor, connection):
     return True
 
 
-def process_candidate(monitor, task, flight, previous=None, preferences=None, market_prices=None):
+def process_candidate(monitor, task, flight, previous=None, preferences=None, market_prices=None, verification_cache=None):
     filters = monitor.get("filters") or {}
-    if not quality(flight, filters) or not budget_ok(flight, filters):
+    if not quality(flight, filters, allow_unverified=True) or not budget_ok(flight, filters):
         return 0, 0
+    verification_cache = verification_cache if verification_cache is not None else {}
     if previous is None:
         previous = fetch_existing(monitor["id"])
     active_previous = [old for old in previous if old.get("visible", True)]
@@ -1057,9 +1114,12 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     cabin = str(task.get("cabin") or "").upper().replace("-", "_")
     return_date = task.get("return_date")
     trip_type_value = task.get("trip_type") or ("round_trip" if return_date else "one_way")
-    if trip_type_value == "round_trip" and flight.get("purchase_link_verified") is not True:
-        # Do not store or alert a round-trip result that only came from the
-        # generic Google search page.
+    connection = api("GET", "telegram_connections", params={"user_id": "eq." + monitor["user_id"], "select": "chat_id"})
+    if connection:
+        flight = verified_candidate(flight, task, verification_cache)
+    # Re-apply the two-leg quality rules after the rendered picker has had a
+    # chance to provide separate outbound/return details.
+    if not quality(flight, filters):
         return 0, 0
     airline = airline_identity(flight)
     previous_prices = []
@@ -1127,7 +1187,6 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     current = saved[0] if saved else (row or match)
     current["_same_offer"] = bool(row)
     current["_pending_unnotified"] = bool(row and not row.get("notified_at") and (row.get("telegram_eligible") or match["telegram_eligible"]))
-    connection = api("GET", "telegram_connections", params={"user_id": "eq." + monitor["user_id"], "select": "chat_id"})
     sent = int(send_due_alert(current, offer, monitor, connection[0] if connection else None))
     if sent:
         current["notified_at"] = datetime.utcnow().isoformat() + "Z"
@@ -1211,6 +1270,7 @@ def main():
     runtime_limit_reached = False
     history_cache = {}
     preference_cache = {}
+    verification_cache = {}
     scan_started_monotonic = time.monotonic()
     try:
         # Preferencje są częścią reguł alertu. Jeżeli baza nie pozwala ich
@@ -1272,6 +1332,7 @@ def main():
                                 monitor, task, flight, history_cache[monitor["id"]],
                                 preference_cache[user_id],
                                 market_prices=market_observations(task, flights, monitor.get("filters") or {}),
+                                verification_cache=verification_cache,
                             )
                             offers_count += added; sent_count += sent
                         except Exception as exc:
@@ -1316,7 +1377,7 @@ def main():
                 user_id = monitor["user_id"]
                 added, sent = process_candidate(
                     monitor, task, flight, history_cache[monitor["id"]],
-                    preference_cache[user_id],
+                    preference_cache[user_id], verification_cache=verification_cache,
                 )
                 offers_count += added; sent_count += sent
             except Exception as exc:

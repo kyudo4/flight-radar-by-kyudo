@@ -196,6 +196,18 @@ def fetch_gf(origin, dest, date, seat="business", return_date=None, timeout=35):
         return None, flights
 
 
+def verify_purchase_links(origin, dest, date, seat="business", return_date=None):
+    """Resolve exact booking links for a single queued Google query.
+
+    The server payload is intentionally used for the cheap first pass. This
+    bounded rendered pass is called only for candidates that can otherwise
+    become Telegram alerts, and returns only cards selected through Google's
+    itinerary picker.
+    """
+    url = build_url(origin, dest, date, seat, return_date=return_date)
+    return google_browser.fetch_rendered(url, return_date=return_date)
+
+
 def _best_value(flights):
     """Najlepsza oferta = najtańsza, a przy zbliżonej cenie (do +2%) NAJKRÓTSZA.
     Bez tego łapaliśmy przypadkową trasę z kilku o tej samej cenie — Google

@@ -487,6 +487,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
             "trip_type": "round_trip", "max_duration_h": 22, "max_stops": 1,
         }))
 
+    def test_incomplete_round_trip_can_reach_the_verification_pass(self):
+        flight = {
+            "round_trip_verified": False, "purchase_link_verified": False,
+            "outbound_duration_h": 14, "return_duration_h": None,
+            "outbound_stops": 1, "return_stops": None,
+        }
+        self.assertTrue(scanner.quality(flight, {
+            "trip_type": "round_trip", "max_duration_h": 22, "max_stops": 1,
+        }, allow_unverified=True))
+
     def test_round_trip_combination_count_ignores_invalid_return_pairs(self):
         filters = {
             "origins": ["WAW"], "destinations": ["NRT"],
@@ -1550,6 +1560,36 @@ class FlightRadarRegressionTests(unittest.TestCase):
         with patch.object(scanner, "telegram") as telegram:
             self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
         telegram.assert_not_called()
+
+    def test_unverified_google_candidate_is_verified_before_alert(self):
+        monitor = {"id": "monitor-verify", "user_id": "user-1",
+                   "filters": {"budget_pln": 5000, "max_duration_h": 24, "max_stops": 1},
+                   "telegram_rules": {"drop_percent": 10}}
+        task = {"origin": "POZ", "dest": "BKK", "date": "2026-09-02", "cabin": "business"}
+        flight = {"airline": "QR", "airline_name": "Qatar Airways", "price_pln": 4000,
+                  "duration_h": 14, "stops": 1, "departure": "10:00",
+                  "purchase_link_verified": False}
+        verified = {**flight, "link": "https://www.google.com/travel/flights/booking?selected=1",
+                    "purchase_link_verified": True}
+        saved_match = {}
+
+        def fake_api(method, path, body=None, params=None):
+            if method == "POST" and path == "flight_offers":
+                return [{"id": "offer-verify", **body}]
+            if method == "POST" and path == "user_matches":
+                saved_match.update(body)
+                return [{"id": "match-verify", **body}]
+            if method == "GET" and path == "telegram_connections":
+                return [{"chat_id": "123"}]
+            return []
+
+        with patch.object(scanner, "api", side_effect=fake_api), \
+             patch.object(scanner.gflights, "verify_purchase_links", return_value=[verified]) as verify, \
+             patch.object(scanner, "telegram", return_value={"ok": True}):
+            added, sent = scanner.process_candidate(monitor, task, flight, previous=[])
+        self.assertEqual((added, sent), (1, 1))
+        self.assertTrue(saved_match["telegram_eligible"])
+        verify.assert_called_once_with("POZ", "BKK", "2026-09-02", seat="business", return_date=None)
 
     def test_purchase_verification_is_shown_as_pending_in_schema_and_panel(self):
         schema = (ROOT / "supabase" / "schema.sql").read_text()
