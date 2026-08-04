@@ -33,6 +33,7 @@ STANDARD_FLOOR = max(1, min(INITIAL_STANDARD, int(os.environ.get("QUERY_BLOCK_FL
 FIRST_FLOOR = max(1, min(INITIAL_FIRST, int(os.environ.get("QUERY_BLOCK_FLOOR_FIRST", "4"))))
 MAX_AIRPORTS_PER_SIDE = 5
 MAX_MONITOR_COMBINATIONS = 5000
+MAX_MONITOR_DATE_WINDOW_DAYS = 14
 SCAN_INTERVAL_HOURS = 6
 FORCE_SCAN = os.environ.get("FORCE_SCAN", "false").lower() == "true"
 FULL_QUEUE_SCAN = os.environ.get("FULL_QUEUE_SCAN", "false").lower() == "true"
@@ -161,6 +162,8 @@ def date_range(filters):
     end = parse_date(filters.get("to") or filters.get("from"))
     if end < start:
         return []
+    if (end - start).days + 1 > MAX_MONITOR_DATE_WINDOW_DAYS:
+        return []
     return [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
 
@@ -174,6 +177,8 @@ def valid_return_dates(filters, departure):
         return [None]
     return_from = parse_date(filters.get("return_from"))
     return_to = parse_date(filters.get("return_to") or filters.get("return_from"))
+    if return_to < return_from or (return_to - return_from).days + 1 > MAX_MONITOR_DATE_WINDOW_DAYS:
+        return []
     return [candidate for candidate in (return_from + timedelta(days=i) for i in range((return_to - return_from).days + 1))
             if (candidate - departure).days >= 1]
 
@@ -184,10 +189,15 @@ def monitor_combination_count(filters):
     destinations = {str(x).upper() for x in (filters or {}).get("destinations", []) if x}
     try:
         departure_days = (parse_date(filters["to"]) - parse_date(filters["from"])).days + 1
+        if departure_days < 1 or departure_days > MAX_MONITOR_DATE_WINDOW_DAYS:
+            return 0
         cabins = (filters.get("cabins") if isinstance(filters.get("cabins"), list)
                   else [filters.get("cabin") or "BUSINESS"])
         cabin_count = len({str(value).upper() for value in cabins if value})
         if trip_type(filters) == "round_trip":
+            return_days = (parse_date(filters["return_to"]) - parse_date(filters["return_from"])).days + 1
+            if return_days < 1 or return_days > MAX_MONITOR_DATE_WINDOW_DAYS:
+                return 0
             return (len(origins) * len(destinations) *
                     valid_round_trip_pair_count(filters) * max(1, cabin_count))
         return len(origins) * len(destinations) * departure_days * max(1, cabin_count)

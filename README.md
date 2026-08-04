@@ -90,6 +90,8 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   przesiadek sprawdza osobno dla wylotu oraz powrotu. Wynik round-trip bez
   potwierdzonych szczegółów powrotu nie przechodzi filtra jakości i nie wywołuje alertu;
 - maksymalny czas i liczba przesiadek są sprawdzane przed zapisem dopasowania;
+- zakres wylotu oraz — przy podróży tam i z powrotem — zakres powrotu może obejmować
+  maksymalnie 14 dni kalendarzowych, aby ograniczyć liczbę zapytań;
 - drugi termin tej samej trasy i linii nie trafia do panelu ani Telegrama, jeśli
   nie jest tańszy od wcześniejszej ceny; nowa linia jest traktowana jako nowe
   dopasowanie;

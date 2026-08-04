@@ -34,6 +34,24 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(len(items), 56)
         self.assertEqual(len({(x["origin"], x["destination"], x["travel_date"]) for x in items}), 56)
 
+    def test_monitor_date_windows_are_limited_to_fourteen_days(self):
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        app = (ROOT / "site" / "app.js").read_text()
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260804000300_max_monitor_date_window.sql").read_text()
+        self.assertIn("MAX_MONITOR_DATE_WINDOW_DAYS = 14", scanner_source)
+        self.assertIn("MAX_MONITOR_DATE_WINDOW_DAYS = 14", app)
+        self.assertIn("validate_monitor_date_windows", schema)
+        self.assertIn("maksymalnie 14 dni", schema)
+        self.assertIn("validate_monitor_date_windows", migration)
+        self.assertIn("to_date - from_date > 13", migration)
+        self.assertIn("return_to_date - return_from_date > 13", migration)
+        monitor = {"id": "monitor-too-wide", "filters": {
+            "origins": ["POZ"], "destinations": ["BKK"],
+            "from": "2026-09-01", "to": "2026-09-15", "cabin": "ECONOMY",
+        }}
+        self.assertEqual(scanner.monitor_combinations(monitor), [])
+
     def test_monitor_materializes_each_selected_cabin(self):
         monitor = {
             "id": "monitor-multi-cabin",
@@ -515,7 +533,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             "return_from": "2026-10-03", "return_to": "2026-11-03",
             "trip_type": "round_trip", "cabins": ["BUSINESS", "FIRST", "ECONOMY", "PREMIUM_ECONOMY"],
         }}
-        self.assertEqual(scanner.monitor_combination_count(monitor["filters"]), 102400)
+        self.assertEqual(scanner.monitor_combination_count(monitor["filters"]), 0)
         self.assertEqual(scanner.monitor_combinations(monitor), [])
 
     def test_past_departures_are_not_materialized(self):
@@ -1289,7 +1307,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("const chooseSuggestion = event =>", app)
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
-        self.assertIn('app.js?v=20260804-4', html)
+        self.assertIn('app.js?v=20260804-5', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1526,7 +1544,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260804-4', html)
+        self.assertIn('app.js?v=20260804-5', html)
         self.assertIn('styles.css?v=20260803-11', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):

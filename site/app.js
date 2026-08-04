@@ -17,6 +17,7 @@
   const airportSelections = { origins: [], destinations: [] };
   const OFFER_PAGE_SIZE = 40;
   const MAX_MONITOR_COMBINATIONS = 5000;
+  const MAX_MONITOR_DATE_WINDOW_DAYS = 14;
 
   const AIRPORT_OVERRIDES = { GDN: "Gdańsk", WAW: "Warszawa", POZ: "Poznań", OSL: "Oslo", ARN: "Sztokholm", CPH: "Kopenhaga", VIE: "Wiedeń", BUD: "Budapeszt", MXP: "Mediolan", IST: "Stambuł", BKK: "Bangkok", SIN: "Singapur", KUL: "Kuala Lumpur", HKG: "Hongkong", HAN: "Hanoi", SGN: "Ho Chi Minh", HND: "Tokio", NRT: "Tokio", ICN: "Seul" };
   const AIRPORTS = { ...AIRPORT_OVERRIDES };
@@ -260,19 +261,23 @@
 
     from.min = today;
     to.min = from.value && from.value >= today ? from.value : today;
+    to.max = addDays(from.value && from.value >= today ? from.value : today, MAX_MONITOR_DATE_WINDOW_DAYS - 1);
 
     // A value already loaded from an old monitor must not survive outside the
     // new selectable range. This also keeps the form valid when the calendar
     // rolls past an existing departure date.
     if (from.value && from.value < today) from.value = "";
     if (to.value && to.value < to.min) to.value = "";
+    if (to.value && to.value > to.max) to.value = "";
     if (from.value && to.value && to.value < from.value) to.value = from.value;
 
     const minimumReturn = from.value ? addDays(from.value, 1) : addDays(today, 1);
     returnFrom.min = minimumReturn;
     if (returnFrom.value && returnFrom.value < minimumReturn) returnFrom.value = "";
     returnTo.min = returnFrom.value || minimumReturn;
+    returnTo.max = addDays(returnFrom.value || minimumReturn, MAX_MONITOR_DATE_WINDOW_DAYS - 1);
     if (returnTo.value && returnTo.value < returnTo.min) returnTo.value = "";
+    if (returnTo.value && returnTo.value > returnTo.max) returnTo.value = "";
   }
 
   function updateMonitorEstimate() {
@@ -327,9 +332,9 @@
     if (!name) { $("formMessage").textContent = "Podaj nazwę monitoringu."; return; }
     if (!validIata(origins) || !validIata(destinations) || origins.length > 5 || destinations.length > 5) { $("formMessage").textContent = "Wybierz od 1 do 5 lotnisk wylotu i celu z podpowiedzi."; return; }
     const days = from && to ? Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 86400000) + 1 : 0;
-    if (!from || !to || from > to || days > 32) { $("formMessage").textContent = "Zakres dat jest nieprawidłowy (maksymalnie 32 dni)."; return; }
+    if (!from || !to || from > to || days > MAX_MONITOR_DATE_WINDOW_DAYS) { $("formMessage").textContent = "Zakres dat wylotu jest nieprawidłowy (maksymalnie 14 dni)."; return; }
     const returnDays = returnFrom && returnTo ? Math.round((new Date(`${returnTo}T12:00:00`) - new Date(`${returnFrom}T12:00:00`)) / 86400000) + 1 : 0;
-    if (trip === "round_trip" && (!returnFrom || !returnTo || returnFrom > returnTo || returnDays > 32 || returnTo <= from)) { $("formMessage").textContent = "Zakres powrotu nie tworzy prawidłowej pary z wylotem."; return; }
+    if (trip === "round_trip" && (!returnFrom || !returnTo || returnFrom > returnTo || returnDays > MAX_MONITOR_DATE_WINDOW_DAYS || returnTo <= from)) { $("formMessage").textContent = "Zakres powrotu jest nieprawidłowy (maksymalnie 14 dni i po wylocie)."; return; }
     const pairCount = trip === "round_trip"
       ? validRoundTripPairCount(from, to, returnFrom, returnTo)
       : days;
