@@ -12,7 +12,8 @@
   const esc = value => String(value ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[c]));
   const safeHref = value => /^https?:\/\//i.test(String(value || "")) ? esc(value) : "#";
   const configReady = cfg.supabaseUrl && cfg.supabaseAnonKey && !String(cfg.supabaseUrl).includes("YOUR_") && !String(cfg.supabaseAnonKey).includes("YOUR_");
-  let client = null, user = null, profile = null, monitors = [], offers = [], priceHistory = {};
+  let client = null, user = null, profile = null, monitors = [], offers = [], priceHistory = {}, monitorProgress = {};
+  let telegramConnectionReady = false;
   let editingMonitorId = null, airportDataReady = false, offerOffset = 0, offersHaveMore = false, offersLoading = false;
   const airportSelections = { origins: [], destinations: [] };
   const OFFER_PAGE_SIZE = 40;
@@ -226,7 +227,13 @@
 
   async function loadMonitors() {
     const { data, error } = await client.from("monitors").select("*").eq("user_id", user.id).order("created_at", { ascending: false });
-    if (error) throw error; monitors = data || []; $("monitorCount").textContent = `${monitors.length}/2 wykorzystane`;
+    if (error) throw error; monitors = data || [];
+    monitorProgress = {};
+    await Promise.all(monitors.map(async monitor => {
+      const result = await client.rpc("get_monitor_scan_progress", { p_monitor_id: monitor.id });
+      if (!result.error && result.data) monitorProgress[monitor.id] = result.data;
+    }));
+    $("monitorCount").textContent = `${monitors.length}/2 wykorzystane`;
     $("monitorList").innerHTML = monitors.length ? monitors.map(renderMonitor).join("") : `<div class="empty">Czysta karta. Ustaw własne kryteria, aby uruchomić pierwszy monitoring.</div>`;
     document.querySelectorAll("[data-action='edit']").forEach(btn => btn.onclick = () => openMonitorDialog(monitors.find(m => m.id === btn.dataset.id)));
     document.querySelectorAll("[data-action='pause']").forEach(btn => btn.onclick = () => updateMonitor(btn.dataset.id, { status: btn.dataset.status === "active" ? "paused" : "active" }));
@@ -239,10 +246,12 @@
     const cabinLabel = cabins.map(cabin => CABINS[cabin] || cabin).join(", ");
     const route = `${(f.origins || []).map(airportLabel).join(", ")} → ${(f.destinations || []).map(airportLabel).join(", ")}`;
     const nextScan = m.status === "active" ? `Następny skan: ${dateTimeFmt(m.next_scan_at)}` : "Skan wstrzymany";
+    const progress = monitorProgress[m.id];
+    const queueLabel = progress && Number(progress.total_count) ? `Kolejka: ${Number(progress.due_count || 0).toLocaleString("pl-PL")}/${Number(progress.total_count).toLocaleString("pl-PL")} oczekuje` : "Kolejka: przygotowywanie";
     const airlineRules = [(f.preferred_airlines || []).length ? `Preferowane: ${(f.preferred_airlines || []).join(", ")}` : "", (f.excluded_airlines || []).length ? `Wykluczone: ${(f.excluded_airlines || []).join(", ")}` : ""].filter(Boolean).join(" · ");
     const durationLabel = f.max_duration_h ? `maks. ${esc(f.max_duration_h)}h` : "bez limitu czasu";
     const dateLabel = f.trip_type === "round_trip" ? `${dateFmt(f.from)}–${dateFmt(f.to)} · powrót ${dateFmt(f.return_from)}–${dateFmt(f.return_to)}` : `${dateFmt(f.from)}–${dateFmt(f.to)}`;
-    return `<article class="monitor-card"><div class="monitor-card-head"><div><h3>${esc(m.name)}</h3><div class="monitor-route">${esc(route)}</div></div><span class="monitor-status ${m.status === "active" ? "status-active" : "status-suspended"}">${m.status === "active" ? "Aktywny" : "Wstrzymany"}</span></div><div class="monitor-info"><div class="monitor-info-row"><span>Klasa</span><strong>${esc(cabinLabel || "—")}</strong></div><div class="monitor-info-row"><span>Daty</span><strong>${esc(dateLabel)}</strong></div><div class="monitor-info-row"><span>Budżet</span><strong>Do ${esc(f.budget_pln ?? "—")} PLN</strong></div><div class="monitor-info-row"><span>Lot</span><strong>${durationLabel} · maks. ${esc(f.max_stops ?? "—")} przesiad.</strong></div><div class="monitor-info-row"><span>Telegram</span><strong>Wszystkie oferty spełniające filtry</strong></div>${airlineRules ? `<div class="monitor-info-row monitor-info-wide"><span>Linie</span><strong>${esc(airlineRules)}</strong></div>` : ""}<div class="monitor-info-row monitor-info-wide"><span>Status skanu</span><strong>${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</strong></div></div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
+    return `<article class="monitor-card"><div class="monitor-card-head"><div><h3>${esc(m.name)}</h3><div class="monitor-route">${esc(route)}</div></div><span class="monitor-status ${m.status === "active" ? "status-active" : "status-suspended"}">${m.status === "active" ? "Aktywny" : "Wstrzymany"}</span></div><div class="monitor-info"><div class="monitor-info-row"><span>Klasa</span><strong>${esc(cabinLabel || "—")}</strong></div><div class="monitor-info-row"><span>Daty</span><strong>${esc(dateLabel)}</strong></div><div class="monitor-info-row"><span>Budżet</span><strong>Do ${esc(f.budget_pln ?? "—")} PLN</strong></div><div class="monitor-info-row"><span>Lot</span><strong>${durationLabel} · maks. ${esc(f.max_stops ?? "—")} przesiad.</strong></div><div class="monitor-info-row"><span>Telegram</span><strong>Wszystkie oferty spełniające filtry</strong></div>${airlineRules ? `<div class="monitor-info-row monitor-info-wide"><span>Linie</span><strong>${esc(airlineRules)}</strong></div>` : ""}<div class="monitor-info-row monitor-info-wide"><span>Status skanu</span><strong>${esc(queueLabel)} · ${esc(dateTimeFmt(m.last_scanned_at))} · ${esc(nextScan)}</strong></div></div><div class="card-actions"><button data-action="edit" data-id="${m.id}">Edytuj</button><button data-action="pause" data-id="${m.id}" data-status="${m.status}">${m.status === "active" ? "Wstrzymaj" : "Wznów"}</button><button data-action="delete" data-id="${m.id}">Usuń</button></div></article>`;
   }
 
   function updateRoundTripFields() {
@@ -420,7 +429,9 @@
       offersHaveMore = matchRows.length === OFFER_PAGE_SIZE;
       show("loadMoreOffersButton", offersHaveMore);
       renderOffers();
-      const last = offers[0]?.updated_at; $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: 4 razy na dobę</span>`;
+      const last = offers[0]?.updated_at;
+      const telegramStatus = telegramConnectionReady ? "✅ Telegram połączony" : "⚠️ Telegram niepołączony — otwórz bota i wyślij /start";
+      $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: 4 razy na dobę</span><span>${telegramStatus}</span>`;
     } finally {
       offersLoading = false;
       button.disabled = false;
@@ -512,10 +523,12 @@
   async function syncTelegramConnection() {
     const metadata = user.user_metadata || {};
     const telegramId = String(metadata.id || metadata.sub || "").trim();
-    if (!telegramId) return;
+    if (!telegramId) { telegramConnectionReady = false; return false; }
     const username = String(metadata.preferred_username || metadata.username || "").trim();
-    const { error } = await client.rpc("sync_telegram_connection", { telegram_chat_id: telegramId, telegram_username: username });
+    const { data, error } = await client.rpc("sync_telegram_connection", { telegram_chat_id: telegramId, telegram_username: username });
+    telegramConnectionReady = !error && data === true;
     if (error) console.warn("Nie udało się zsynchronizować Telegrama", error.message);
+    return telegramConnectionReady;
   }
 
   async function loadAdmin() {

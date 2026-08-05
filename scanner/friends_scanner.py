@@ -324,6 +324,17 @@ def sync_monitor_scan_items(monitor):
                         raise
 
 
+def refresh_monitor_status(monitor_id):
+    """Synchronize the human-facing monitor timestamps with its queue."""
+    try:
+        return api("POST", "rpc/refresh_monitor_scan_status", body={"p_monitor_id": monitor_id})
+    except Exception as exc:
+        # Queue processing remains valid even if the cosmetic summary cannot
+        # be updated. The next run repairs it again.
+        log("Nie udało się odświeżyć statusu monitora %s: %s" % (monitor_id, str(exc)[:120]))
+        return None
+
+
 def _scan_item_exists(item):
     params = {
         "monitor_id": "eq." + item["monitor_id"],
@@ -962,7 +973,7 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
 def fetch_existing(monitor_id):
     return fetch_all_rows("user_matches", {
         "monitor_id": "eq." + monitor_id,
-        "select": "id,offer_id,visible,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(fingerprint,route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln,first_seen_at)",
+        "select": "id,offer_id,visible,notified_at,notified_generation,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(fingerprint,route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln,first_seen_at)",
         "order": "updated_at.asc,id.asc",
     })
 
@@ -1157,17 +1168,22 @@ def send_due_alert(match, offer, monitor, connection):
     is_drop = price_drop_eligible(old, price, drop * 100)
     is_new_low = bool(match.get("telegram_eligible"))
     is_new_airline = bool(match.get("new_airline"))
+    is_new_filter_scope = bool(match.get("_new_filter_scope"))
     same_offer = bool(match.get("_same_offer"))
     pending_unnotified = bool(match.get("_pending_unnotified"))
     # A new lowest price is always alerted. The setting is intentionally no
     # longer user-configurable; only duplicate/repeat safeguards still apply.
     immediate_new_low = not same_offer
-    if not is_drop and not is_new_airline and not pending_unnotified and not (is_new_low and immediate_new_low):
+    if not is_drop and not is_new_airline and not is_new_filter_scope and not pending_unnotified and not (is_new_low and immediate_new_low):
         return False
     sent = telegram("sendMessage", {"chat_id": connection["chat_id"], "text": alert_text(offer, stars, match["id"]), "parse_mode": "HTML", "disable_web_page_preview": False, "reply_markup": {"inline_keyboard": [[{"text": "👍 Kupiłbym", "callback_data": "fb|%s|buy" % match["id"]}, {"text": "💸 Za drogo", "callback_data": "fb|%s|expensive" % match["id"]}], [{"text": "🙅 Nie interesuje", "callback_data": "fb|%s|skip" % match["id"]}, {"text": "⏱ Za długo", "callback_data": "fb|%s|toolong" % match["id"]}, {"text": "✈️ Zła linia", "callback_data": "fb|%s|badairline" % match["id"]}]]}})
     if not sent or not sent.get("ok"):
         raise RuntimeError("Telegram nie potwierdził wysłania alertu")
-    api("PATCH", "user_matches", body={"notified_at": datetime.utcnow().isoformat() + "Z", "last_notified_price": price}, params={"id": "eq." + match["id"]})
+    api("PATCH", "user_matches", body={
+        "notified_at": datetime.utcnow().isoformat() + "Z",
+        "last_notified_price": price,
+        "notified_generation": int(match.get("_monitor_generation") or 0),
+    }, params={"id": "eq." + match["id"]})
     return True
 
 
@@ -1194,6 +1210,7 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     cabin = str(task.get("cabin") or "").upper().replace("-", "_")
     return_date = task.get("return_date")
     trip_type_value = task.get("trip_type") or ("round_trip" if return_date else "one_way")
+    monitor_generation = int(monitor.get("queue_generation") or 0)
     connection = api("GET", "telegram_connections", params={"user_id": "eq." + monitor["user_id"], "select": "chat_id"})
     # Re-apply the two-leg quality rules after the rendered picker has had a
     # chance to provide separate outbound/return details.
@@ -1243,6 +1260,8 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
         return 0, 0
     offer = save_offer(task, flight)
     row = next((x for x in active_previous if x["offer_id"] == offer["id"]), None)
+    previously_notified_generation = int((row or {}).get("notified_generation") or 0)
+    new_filter_scope = bool(row and previously_notified_generation < monitor_generation)
     current_price = flight.get("price_pln")
     previous_min = min(previous_prices) if previous_prices else None
     prices = previous_prices + ([current_price] if current_price is not None else [])
@@ -1262,7 +1281,7 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     )
     match = {"user_id": monitor["user_id"], "monitor_id": monitor["id"], "offer_id": offer["id"], "stars": stars,
              "visible": True,
-             "telegram_eligible": verified_for_alert and round_trip_verified and (is_new_low or is_new_airline),
+             "telegram_eligible": verified_for_alert and round_trip_verified and (is_new_low or is_new_airline or new_filter_scope),
              "new_airline": is_new_airline,
              "min_price_for_user": min(prices) if prices else None}
     # Jeżeli alert nie został jeszcze wysłany (brak połączenia Telegram albo
@@ -1275,11 +1294,14 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     saved = api("POST", "user_matches", body=match, params={"on_conflict": "user_id,monitor_id,offer_id"})
     current = saved[0] if saved else (row or match)
     current["_same_offer"] = bool(row)
+    current["_new_filter_scope"] = new_filter_scope
+    current["_monitor_generation"] = monitor_generation
     current["_pending_unnotified"] = bool(row and not row.get("notified_at") and (row.get("telegram_eligible") or match["telegram_eligible"]))
     sent = int(send_due_alert(current, offer, monitor, connection[0] if connection else None))
     if sent:
         current["notified_at"] = datetime.utcnow().isoformat() + "Z"
         current["last_notified_price"] = offer.get("price_pln")
+        current["notified_generation"] = monitor_generation
         current["_pending_unnotified"] = False
     cache_entry = {**current, "flight_offers": offer}
     if row:
@@ -1315,6 +1337,7 @@ def main():
     for monitor in active:
         try:
             sync_monitor_scan_items(monitor)
+            refresh_monitor_status(monitor["id"])
         except Exception as exc:
             error = "Kolejka monitora %s: %s" % (monitor["id"], str(exc)[:160])
             sync_errors.append(error)
@@ -1446,7 +1469,6 @@ def main():
                     # hard Google blocks still use the separate break above.
             else:
                 api("PATCH", "monitor_scan_items", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
-                api("PATCH", "monitors", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["monitor_ids"])})
             if executed_count % PROGRESS_UPDATE_EVERY == 0:
                 update_scan_progress(run["id"], executed_count, offers_count)
         # RSS nie zużywa limitu zapytań Google, ale przechodzi ten sam filtr
@@ -1472,6 +1494,8 @@ def main():
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
+        for monitor in active:
+            refresh_monitor_status(monitor["id"])
         source_unavailable = executed_count > 0 and failed_google_tasks > 0 and successful_google_tasks == 0
         final_status = "blocked" if blocked else ("error" if source_unavailable else ("partial" if task_errors or source_degraded or source_capacity_reached or runtime_limit_reached else "ok"))
         # Do this only after every queued Google task in this run succeeded.

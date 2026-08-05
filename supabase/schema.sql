@@ -48,6 +48,7 @@ create table public.monitors (
   telegram_rules jsonb not null default '{}'::jsonb,
   expires_at date,
   filters_changed_at timestamptz not null default now(),
+  queue_generation bigint not null default 0,
   last_scanned_at timestamptz,
   next_scan_at timestamptz,
   created_at timestamptz not null default now(),
@@ -63,6 +64,7 @@ create table public.monitor_scan_items (
   return_date date,
   trip_type text not null default 'one_way' check (trip_type in ('one_way', 'round_trip')),
   cabin text not null,
+  queue_generation bigint not null default 0,
   last_scanned_at timestamptz,
   next_scan_at timestamptz not null default now(),
   created_at timestamptz not null default now()
@@ -122,6 +124,7 @@ create table public.user_matches (
   telegram_eligible boolean not null default false,
   new_airline boolean not null default false,
   notified_at timestamptz,
+  notified_generation bigint not null default 0,
   last_notified_price integer,
   min_price_for_user integer,
   feedback text,
@@ -203,6 +206,7 @@ returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   desired_count integer;
   queue_count integer;
+  current_generation bigint;
 begin
   if jsonb_typeof(coalesce(p_items, 'null'::jsonb)) <> 'array' then
     raise exception 'Pozycje kolejki muszą być tablicą JSON';
@@ -211,7 +215,10 @@ begin
   if desired_count > 5000 then
     raise exception 'Kolejka monitora przekracza limit 5000 kombinacji';
   end if;
-  if not exists (select 1 from public.monitors where id = p_monitor_id) then
+  select queue_generation into current_generation
+  from public.monitors
+  where id = p_monitor_id;
+  if not found then
     raise exception 'Monitor nie istnieje';
   end if;
   if exists (
@@ -246,26 +253,82 @@ begin
         and lower(replace(desired.cabin, '_', '-')) = current_item.cabin
     );
   insert into public.monitor_scan_items(
-    monitor_id, origin, destination, travel_date, return_date, trip_type, cabin
+    monitor_id, origin, destination, travel_date, return_date, trip_type, cabin,
+    queue_generation, last_scanned_at, next_scan_at
   )
   select p_monitor_id, upper(trim(desired.origin)), upper(trim(desired.destination)),
     desired.travel_date, desired.return_date, desired.trip_type,
-    lower(replace(desired.cabin, '_', '-'))
+    lower(replace(desired.cabin, '_', '-')), current_generation, null, now()
   from jsonb_to_recordset(p_items) as desired(
     origin text, destination text, travel_date date, return_date date,
     trip_type text, cabin text
   )
   on conflict do nothing;
+  update public.monitor_scan_items
+  set queue_generation = current_generation,
+      last_scanned_at = null,
+      next_scan_at = now()
+  where monitor_id = p_monitor_id
+    and queue_generation is distinct from current_generation;
   select count(*) into queue_count from public.monitor_scan_items where monitor_id = p_monitor_id;
   if queue_count <> desired_count then
     raise exception 'Niepełna kolejka monitora: oczekiwano %, zapisano %', desired_count, queue_count;
   end if;
-  return jsonb_build_object('desired_count', desired_count, 'queue_count', queue_count);
+  return jsonb_build_object('desired_count', desired_count, 'queue_count', queue_count, 'queue_generation', current_generation);
 end;
 $$;
 
 revoke all on function public.sync_monitor_scan_items(uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.sync_monitor_scan_items(uuid, jsonb) to service_role;
+
+create or replace function public.refresh_monitor_scan_status(p_monitor_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  total_count integer;
+  due_count integer;
+  latest_scan timestamptz;
+  earliest_next timestamptz;
+begin
+  select count(*)::integer,
+         count(*) filter (where next_scan_at <= now())::integer,
+         max(last_scanned_at),
+         min(next_scan_at)
+    into total_count, due_count, latest_scan, earliest_next
+  from public.monitor_scan_items
+  where monitor_id = p_monitor_id;
+
+  update public.monitors
+  set last_scanned_at = latest_scan,
+      next_scan_at = case when due_count > 0 then now() else earliest_next end
+  where id = p_monitor_id;
+
+  return jsonb_build_object('total_count', total_count, 'due_count', due_count, 'last_scanned_at', latest_scan, 'next_scan_at', case when due_count > 0 then now() else earliest_next end);
+end;
+$$;
+
+revoke all on function public.refresh_monitor_scan_status(uuid) from public, anon, authenticated;
+grant execute on function public.refresh_monitor_scan_status(uuid) to service_role;
+
+create or replace function public.get_monitor_scan_progress(p_monitor_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (select 1 from public.monitors where id = p_monitor_id and user_id = auth.uid() and public.is_active_user(user_id)) then
+    return null;
+  end if;
+  return (
+    select jsonb_build_object(
+      'total_count', count(*)::integer,
+      'due_count', count(*) filter (where next_scan_at <= now())::integer,
+      'scanned_count', count(*) filter (where last_scanned_at is not null)::integer
+    )
+    from public.monitor_scan_items
+    where monitor_id = p_monitor_id
+  );
+end;
+$$;
+
+revoke all on function public.get_monitor_scan_progress(uuid) from public, anon;
+grant execute on function public.get_monitor_scan_progress(uuid) to authenticated;
 create index offers_route_date_idx on public.flight_offers(origin, destination, travel_date, cabin);
 create index offers_round_trip_date_idx on public.flight_offers(origin, destination, travel_date, return_date, cabin);
 create index flight_offers_travel_date_idx on public.flight_offers(travel_date);
@@ -417,6 +480,7 @@ returns trigger language plpgsql set search_path = public as $$
 begin
   if new.filters is distinct from old.filters then
     new.filters_changed_at = now();
+    new.queue_generation = coalesce(old.queue_generation, 0) + 1;
   end if;
   return new;
 end;

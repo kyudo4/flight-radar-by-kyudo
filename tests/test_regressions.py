@@ -34,6 +34,15 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(len(items), 56)
         self.assertEqual(len({(x["origin"], x["destination"], x["travel_date"]) for x in items}), 56)
 
+    def test_edited_thailand_monitor_materializes_all_126_queries(self):
+        monitor = {"id": "monitor-thailand", "filters": {
+            "origins": ["WAW", "POZ", "GDN"],
+            "destinations": ["BKK", "HKT", "DMK"],
+            "from": "2026-10-20", "to": "2026-11-02",
+            "cabins": ["ECONOMY"],
+        }}
+        self.assertEqual(len(scanner.monitor_combinations(monitor)), 126)
+
     def test_monitor_date_windows_are_limited_to_fourteen_days(self):
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         app = (ROOT / "site" / "app.js").read_text()
@@ -704,6 +713,20 @@ class FlightRadarRegressionTests(unittest.TestCase):
             self.assertFalse(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
         telegram.assert_not_called()
 
+    def test_filter_edit_allows_one_alert_for_existing_offer_in_new_scope(self):
+        match = {
+            "id": "match-scope", "stars": 5, "last_notified_price": 1300,
+            "telegram_eligible": False, "new_airline": False,
+            "_same_offer": True, "_new_filter_scope": True,
+            "_monitor_generation": 2,
+        }
+        offer = {"price_pln": 1300, "tags": []}
+        monitor = {"filters": {"budget_pln": 2000}, "telegram_rules": {"drop_percent": 10}}
+        with patch.object(scanner, "telegram", return_value={"ok": True}) as telegram, patch.object(scanner, "api") as api:
+            self.assertTrue(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
+        telegram.assert_called_once()
+        self.assertEqual(api.call_args.kwargs["body"]["notified_generation"], 2)
+
     def test_user_preferred_airline_increases_offer_score(self):
         flight = {"airline": "SQ", "airline_name": "Singapore Airlines", "price_pln": 5000, "duration_h": 14, "stops": 1}
         base = scanner.score(flight, {"budget_pln": 6000})
@@ -1180,6 +1203,15 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(api.call_args.args[:2], ("POST", "rpc/sync_monitor_scan_items"))
         self.assertEqual(len(api.call_args.kwargs["body"]["p_items"]), 1)
 
+    def test_edit_queue_generation_resets_existing_items_immediately(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260805000300_edit_queue_and_alert_generation.sql").read_text()
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        for source in (migration, schema):
+            self.assertIn("queue_generation", source)
+            self.assertIn("next_scan_at = now()", source)
+            self.assertIn("refresh_monitor_scan_status", source)
+        self.assertIn("notified_generation", migration)
+
     def test_invalid_telegram_feedback_is_rejected_before_database_write(self):
         api_calls = []
 
@@ -1331,7 +1363,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260805-1', html)
+        self.assertIn('app.js?v=20260805-2', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1573,7 +1605,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260805-1', html)
+        self.assertIn('app.js?v=20260805-2', html)
         self.assertIn('styles.css?v=20260804-12', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
