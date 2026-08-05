@@ -57,7 +57,10 @@ jobs:
           GOOGLE_REQUEST_DELAY_SECONDS: "1.5"
           MAX_SCAN_RUNTIME_SECONDS: "3000"
           SCAN_PROGRESS_EVERY: "5"
-          GOOGLE_BROWSER_QUERY_LIMIT: ${{ inputs.full_queue_scan == true && '800' || '80' }}
+          # Rendered fallback pages are expensive, but 80 loads were consumed
+          # by only a small group of round-trip queries. Keep a bounded 400
+          # page budget for normal runs and 800 for an explicit full pass.
+          GOOGLE_BROWSER_QUERY_LIMIT: ${{ inputs.full_queue_scan == true && '800' || '400' }}
           FULL_QUEUE_SCAN: ${{ inputs.full_queue_scan == true && 'true' || 'false' }}
           FULL_QUEUE_STANDARD_LIMIT: "800"
           FULL_QUEUE_FIRST_LIMIT: "150"

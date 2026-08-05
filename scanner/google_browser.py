@@ -356,6 +356,11 @@ def _load_cards(page, url, returning=False):
             )
         except (BrowserBlockedError, BrowserNoFlightsError):
             raise
+        except BrowserCapacityError:
+            # Capacity is a deliberate global safety stop, not a malformed
+            # Google response. Preserve the type so the scanner can stop and
+            # leave the unprocessed queue items due for the next run.
+            raise
         except Exception as exc:
             last_error = exc
             try:

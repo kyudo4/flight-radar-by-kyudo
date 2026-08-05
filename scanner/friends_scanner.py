@@ -399,6 +399,24 @@ def fetch_due_scan_items(active_ids, now):
     return fetch_all_rows("monitor_scan_items", base_params, page_size=1000)
 
 
+def fetch_scan_queue_summary():
+    """Read stable queue metrics separately from the due workset.
+
+    ``due_count`` in a scan run is the number of unique Google queries after
+    deduplication. It is intentionally not the same as the number of stored
+    monitor rows, so both values must be recorded to avoid confusing queue
+    sizes between runs.
+    """
+    try:
+        summary = api("POST", "rpc/scan_queue_summary", body={})
+        return summary if isinstance(summary, dict) else {}
+    except Exception as exc:
+        # The migration is additive. Older deployments can still scan and use
+        # the due workset; they simply do not get the extra queue counters.
+        log("Nie udało się odczytać pełnych statystyk kolejki: %s" % str(exc)[:120])
+        return {}
+
+
 def fetch_all_rows(path, params, page_size=1000):
     """Read every PostgREST page so history-dependent rules stay durable."""
     result = []
@@ -1377,6 +1395,9 @@ def main():
         log("Ręczny start: wymuszono sprawdzenie kolejki aktywnych monitorów")
 
     all_due_items = fetch_due_scan_items([m["id"] for m in active], now)
+    queue_summary = fetch_scan_queue_summary()
+    due_item_count = int(queue_summary.get("due_item_count") or len(all_due_items))
+    total_queue_count = int(queue_summary.get("total_queue_count") or due_item_count)
     active_by_id = {m["id"]: m for m in active}
     for item in all_due_items:
         item["user_id"] = active_by_id[item["monitor_id"]]["user_id"]
@@ -1396,9 +1417,9 @@ def main():
         reserved = api("GET", "scan_runs", params={"id": "eq." + RESERVED_RUN_ID, "select": "*"})
         run = reserved[0] if reserved else None
         if run:
-            api("PATCH", "scan_runs", body={"status": "running", "query_count": 0, "due_count": 0, "selected_count": 0, "failed_count": 0, "deferred_count": 0, "coverage_percent": 100, "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False, "error": None}, params={"id": "eq." + RESERVED_RUN_ID})
+            api("PATCH", "scan_runs", body={"status": "running", "query_count": 0, "due_count": 0, "due_item_count": due_item_count, "total_queue_count": total_queue_count, "selected_count": 0, "failed_count": 0, "deferred_count": 0, "coverage_percent": 100, "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False, "error": None}, params={"id": "eq." + RESERVED_RUN_ID})
     if not run:
-        run = api("POST", "scan_runs", body={"query_count": 0, "due_count": 0, "selected_count": 0, "failed_count": 0, "deferred_count": 0, "coverage_percent": 100, "status": "running", "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False})[0]
+        run = api("POST", "scan_runs", body={"query_count": 0, "due_count": 0, "due_item_count": due_item_count, "total_queue_count": total_queue_count, "selected_count": 0, "failed_count": 0, "deferred_count": 0, "coverage_percent": 100, "status": "running", "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False})[0]
     offers_count = 0
     sent_count = 0
     task_errors = list(sync_errors)
@@ -1571,6 +1592,8 @@ def main():
             "finished_at": datetime.utcnow().isoformat() + "Z",
             "query_count": executed_count,
             "due_count": due_count,
+            "due_item_count": due_item_count,
+            "total_queue_count": total_queue_count,
             "selected_count": selected_count,
             "failed_count": failed_count,
             "deferred_count": deferred_count,

@@ -557,7 +557,7 @@
   const scanStatusClass = value => value === "ok" ? "active" : value === "running" || value === "queued" ? "pending" : "suspended";
   const scanErrorDetails = value => value ? `<details class="scan-error-details"><summary>Pokaż szczegóły techniczne</summary><div>${esc(value)}</div></details>` : "";
   async function loadScanStatus() {
-    const fields = "id,started_at,finished_at,query_count,due_count,selected_count,failed_count,deferred_count,coverage_percent,standard_limit,first_limit,blocked,offer_count,status,error";
+    const fields = "id,started_at,finished_at,query_count,due_count,due_item_count,total_queue_count,selected_count,failed_count,deferred_count,coverage_percent,standard_limit,first_limit,blocked,offer_count,status,error";
     let { data, error } = await client.from("scan_runs").select(fields).order("started_at", { ascending: false }).limit(8);
     if (error && /due_count|coverage_percent|column/i.test(error.message || "")) {
       ({ data, error } = await client.from("scan_runs").select("id,started_at,finished_at,query_count,standard_limit,first_limit,blocked,offer_count,status,error").order("started_at", { ascending: false }).limit(8));
@@ -565,7 +565,7 @@
     if (error) { $("scanStatus").textContent = "Brak danych o skanach."; return null; }
     const rows = data || [], latest = rows[0];
     const coverage = row => row.coverage_percent == null ? "" : ` · pokrycie: ${Number(row.coverage_percent).toLocaleString("pl-PL", { maximumFractionDigits: 2 })}%`;
-    const queue = row => row.due_count == null ? "" : ` · kolejka: ${row.selected_count || 0}/${row.due_count || 0}`;
+    const queue = row => row.due_count == null ? "" : ` · zapytania: ${row.selected_count || 0}/${row.due_count || 0} · pozycje kolejki: ${row.due_item_count == null ? "—" : `${row.due_item_count}/${row.total_queue_count || 0}`}`;
     $("scanStatus").innerHTML = latest ? `<strong>Ostatni skan: ${esc(scanStatusLabel(latest.status))}</strong> · ${esc(dateTimeFmt(latest.started_at))} · zapytań: ${latest.query_count || 0} · ofert: ${latest.offer_count || 0}${queue(latest)}${coverage(latest)}${scanErrorDetails(latest.error)}` : "Brak uruchomionych skanów.";
     $("scanHistory").innerHTML = rows.length ? `<h3>Historia skanów</h3>${rows.map(row => `<div class="scan-row"><span class="status-${scanStatusClass(row.status)}">${esc(scanStatusLabel(row.status))}</span><span>${esc(dateTimeFmt(row.started_at))}</span><span>${row.query_count || 0} zapytań · ${row.offer_count || 0} ofert${queue(row)}${coverage(row)}</span>${scanErrorDetails(row.error)}</div>`).join("")}` : "";
     return latest;

@@ -390,6 +390,15 @@ class FlightRadarRegressionTests(unittest.TestCase):
         with self.assertRaises(google_browser.BrowserParseError):
             google_browser._load_cards(ErrorShellPage(), "https://google.test")
 
+    def test_browser_capacity_is_not_misreported_as_a_parse_error(self):
+        class Page:
+            def goto(self, *args, **kwargs): pass
+
+        with patch.object(google_browser, "_consume_query_slot",
+                          side_effect=google_browser.BrowserCapacityError("limit 400")):
+            with self.assertRaises(google_browser.BrowserCapacityError):
+                google_browser._load_cards(Page(), "https://google.test")
+
     def test_round_trip_without_exact_return_is_an_empty_result_not_source_failure(self):
         outbound = [{
             "airline_name": "Air France", "price_pln": 4500,
@@ -1396,7 +1405,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260805-3', html)
+        self.assertIn('app.js?v=20260805-4', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1638,7 +1647,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260805-3', html)
+        self.assertIn('app.js?v=20260805-4', html)
         self.assertIn('styles.css?v=20260805-13', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
@@ -1941,6 +1950,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("return_date, cabin", migration)
         self.assertIn("Niepełna kolejka monitora", migration)
         self.assertIn("coverage_percent", migration)
+
+    def test_scan_history_distinguishes_due_queries_from_stored_queue_rows(self):
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        app = (ROOT / "site" / "app.js").read_text()
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260805000600_scan_queue_metrics.sql").read_text()
+        self.assertIn("fetch_scan_queue_summary", scanner_source)
+        self.assertIn("due_item_count", app)
+        self.assertIn("total_queue_count", schema)
+        self.assertIn("scan_queue_summary", migration)
 
     def test_source_structure_errors_are_not_reported_as_google_blocks(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
