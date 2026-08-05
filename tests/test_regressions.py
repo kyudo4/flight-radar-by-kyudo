@@ -1312,7 +1312,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260804-7', html)
+        self.assertIn('app.js?v=20260805-1', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1552,7 +1552,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260804-7', html)
+        self.assertIn('app.js?v=20260805-1', html)
         self.assertIn('styles.css?v=20260804-12', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
@@ -1689,10 +1689,11 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("validRoundTripPairCount(from, to, returnFrom, returnTo)", app)
         self.assertIn("const pairCount = trip === \"round_trip\"", app)
 
-    def test_partial_scan_is_recorded_without_failing_workflow(self):
+    def test_partial_scan_is_recorded_and_fails_workflow_health_check(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn('"partial" if task_errors or source_degraded', source)
-        self.assertNotIn('if final_status == "partial":', source)
+        self.assertIn('if final_status == "partial":', source)
+        self.assertIn("raise ScanPartialRun", source)
 
     def test_migrations_have_an_automatic_deployment_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
@@ -1837,6 +1838,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("return_date is not distinct from", migration)
         self.assertIn("revoke all on function public.sync_monitor_scan_items", migration)
         self.assertIn("grant execute on function public.sync_monitor_scan_items(uuid, jsonb) to service_role", migration)
+
+    def test_durable_queue_integrity_migration_drops_truncated_constraint(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260805000100_durable_queue_integrity.sql").read_text()
+        self.assertIn("pg_constraint", migration)
+        self.assertIn("monitor_scan_items_monitor_id_origin_destination_travel_dat_key", migration)
+        self.assertIn("return_date, cabin", migration)
+        self.assertIn("Niepełna kolejka monitora", migration)
+        self.assertIn("coverage_percent", migration)
 
     def test_source_structure_errors_are_not_reported_as_google_blocks(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()

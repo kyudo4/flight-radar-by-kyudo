@@ -157,6 +157,11 @@ create table public.scan_runs (
   standard_limit integer,
   first_limit integer,
   blocked boolean not null default false,
+  due_count integer not null default 0,
+  selected_count integer not null default 0,
+  failed_count integer not null default 0,
+  deferred_count integer not null default 0,
+  coverage_percent numeric(5,2) not null default 0.00 check (coverage_percent >= 0 and coverage_percent <= 100),
   offer_count integer not null default 0,
   status text not null default 'running',
   error text
@@ -251,6 +256,9 @@ begin
   )
   on conflict do nothing;
   select count(*) into queue_count from public.monitor_scan_items where monitor_id = p_monitor_id;
+  if queue_count <> desired_count then
+    raise exception 'Niepełna kolejka monitora: oczekiwano %, zapisano %', desired_count, queue_count;
+  end if;
   return jsonb_build_object('desired_count', desired_count, 'queue_count', queue_count);
 end;
 $$;

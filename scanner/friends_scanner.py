@@ -268,15 +268,25 @@ def sync_monitor_scan_items(monitor):
     try:
         # Database-side reconciliation is atomic and idempotent.  It prevents
         # a concurrent monitor update from producing a false HTTP 409.
-        api("POST", "rpc/sync_monitor_scan_items", body={
+        result = api("POST", "rpc/sync_monitor_scan_items", body={
             "p_monitor_id": monitor["id"],
             "p_items": desired,
         })
+        if isinstance(result, dict):
+            desired_count = int(result.get("desired_count", len(desired)))
+            queue_count = int(result.get("queue_count", desired_count))
+            if desired_count != queue_count:
+                raise RuntimeError(
+                    "Niepełna kolejka monitora: oczekiwano %d, zapisano %d"
+                    % (desired_count, queue_count)
+                )
         return
     except urllib.error.HTTPError as exc:
         # Additive deployment: keep the old path working until migration 008
         # reaches production.  Other HTTP errors must remain visible.
         if exc.code not in {400, 404}:
+            raise
+        if any(marker in str(exc) for marker in ("Niepełna kolejka", "Kolejka zawiera nieprawidłową", "Kolejka monitora przekracza")):
             raise
     existing = fetch_all_rows("monitor_scan_items", {
         "monitor_id": "eq." + monitor["id"],
@@ -335,6 +345,10 @@ class ScanBlockedRun(RuntimeError):
 
 class ScanSourceRun(RuntimeError):
     """Oznacza zmianę/awarię formatu źródła, a nie blokadę ruchu."""
+
+
+class ScanPartialRun(RuntimeError):
+    """Sprawdzony częściowo przebieg musi być widoczny jako nieudany w CI."""
 
 
 def force_due_scan_items(monitors, now):
@@ -1298,9 +1312,9 @@ def main():
         reserved = api("GET", "scan_runs", params={"id": "eq." + RESERVED_RUN_ID, "select": "*"})
         run = reserved[0] if reserved else None
         if run:
-            api("PATCH", "scan_runs", body={"status": "running", "query_count": 0, "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False, "error": None}, params={"id": "eq." + RESERVED_RUN_ID})
+            api("PATCH", "scan_runs", body={"status": "running", "query_count": 0, "due_count": 0, "selected_count": 0, "failed_count": 0, "deferred_count": 0, "coverage_percent": 100, "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False, "error": None}, params={"id": "eq." + RESERVED_RUN_ID})
     if not run:
-        run = api("POST", "scan_runs", body={"query_count": 0, "status": "running", "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False})[0]
+        run = api("POST", "scan_runs", body={"query_count": 0, "due_count": 0, "selected_count": 0, "failed_count": 0, "deferred_count": 0, "coverage_percent": 100, "status": "running", "standard_limit": limits["standard"], "first_limit": limits["first"], "blocked": False})[0]
     offers_count = 0
     sent_count = 0
     task_errors = list(sync_errors)
@@ -1445,15 +1459,36 @@ def main():
             task_errors=task_errors,
         ):
             mark_stale_offers()
-        api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": final_status, "blocked": blocked, "error": " | ".join(task_errors)[:500] or None}, params={"id": "eq." + run["id"]})
+        due_count = len(all_tasks)
+        selected_count = len(tasks)
+        failed_count = failed_google_tasks + len(sync_errors)
+        deferred_count = max(0, due_count - successful_google_tasks)
+        coverage_percent = round((successful_google_tasks / due_count) * 100, 2) if due_count else 100.00
+        api("PATCH", "scan_runs", body={
+            "finished_at": datetime.utcnow().isoformat() + "Z",
+            "query_count": executed_count,
+            "due_count": due_count,
+            "selected_count": selected_count,
+            "failed_count": failed_count,
+            "deferred_count": deferred_count,
+            "coverage_percent": coverage_percent,
+            "offer_count": offers_count,
+            "status": final_status,
+            "blocked": blocked,
+            "error": " | ".join(task_errors)[:500] or None,
+        }, params={"id": "eq." + run["id"]})
         log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
         if blocked:
             raise ScanBlockedRun("Google zablokował skan; kolejny przebieg pozostaje na bezpiecznym limicie")
         if source_unavailable:
             raise ScanSourceRun("Google zmienił lub zwrócił uszkodzoną strukturę danych; skan został bezpiecznie zatrzymany")
+        if final_status == "partial":
+            raise ScanPartialRun("Skan zakończył się częściowo; nie wszystkie pozycje zostały sprawdzone")
     except ScanBlockedRun:
         raise
     except ScanSourceRun:
+        raise
+    except ScanPartialRun:
         raise
     except Exception as exc:
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": "error", "error": str(exc)[:500]}, params={"id": "eq." + run["id"]})
