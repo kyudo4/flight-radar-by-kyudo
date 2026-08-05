@@ -22,11 +22,11 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 TG_TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 INITIAL_STANDARD = max(1, min(1000, int(os.environ.get("MAX_STANDARD_QUERIES", "800"))))
-INITIAL_FIRST = max(1, min(100, int(os.environ.get("MAX_FIRST_QUERIES", "12"))))
+INITIAL_FIRST = max(1, min(200, int(os.environ.get("MAX_FIRST_QUERIES", "150"))))
 MAX_STANDARD = INITIAL_STANDARD
 MAX_FIRST = INITIAL_FIRST
 STANDARD_CEILING = max(INITIAL_STANDARD, min(1000, int(os.environ.get("MAX_STANDARD_CEILING", "800"))))
-FIRST_CEILING = max(INITIAL_FIRST, min(100, int(os.environ.get("MAX_FIRST_CEILING", "24"))))
+FIRST_CEILING = max(INITIAL_FIRST, min(200, int(os.environ.get("MAX_FIRST_CEILING", "150"))))
 STANDARD_STEP = max(1, min(200, int(os.environ.get("QUERY_RAMP_STANDARD_STEP", "40"))))
 FIRST_STEP = max(1, min(50, int(os.environ.get("QUERY_RAMP_FIRST_STEP", "2"))))
 STANDARD_FLOOR = max(1, min(INITIAL_STANDARD, int(os.environ.get("QUERY_BLOCK_FLOOR_STANDARD", "60"))))
@@ -38,7 +38,7 @@ SCAN_INTERVAL_HOURS = 6
 FORCE_SCAN = os.environ.get("FORCE_SCAN", "false").lower() == "true"
 FULL_QUEUE_SCAN = os.environ.get("FULL_QUEUE_SCAN", "false").lower() == "true"
 FULL_QUEUE_STANDARD_LIMIT = max(1, min(1000, int(os.environ.get("FULL_QUEUE_STANDARD_LIMIT", "800"))))
-FULL_QUEUE_FIRST_LIMIT = max(1, min(100, int(os.environ.get("FULL_QUEUE_FIRST_LIMIT", "40"))))
+FULL_QUEUE_FIRST_LIMIT = max(1, min(200, int(os.environ.get("FULL_QUEUE_FIRST_LIMIT", "150"))))
 PROCESS_TELEGRAM_ONLY = os.environ.get("PROCESS_TELEGRAM_ONLY", "false").lower() == "true"
 RESERVED_RUN_ID = os.environ.get("RESERVED_RUN_ID", "").strip()
 REQUEST_DELAY_SECONDS = max(0.5, min(5.0, float(os.environ.get("GOOGLE_REQUEST_DELAY_SECONDS", "1.5"))))

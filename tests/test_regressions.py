@@ -564,7 +564,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             {"status": "partial", "blocked": False, "standard_limit": 160, "first_limit": 8},
         ]):
             increased = scanner.adaptive_query_limits()
-            self.assertEqual(increased, {"standard": 800, "first": 12})
+            self.assertEqual(increased, {"standard": 800, "first": 150})
 
         with patch.object(scanner, "api", side_effect=RuntimeError("history unavailable")):
             self.assertEqual(scanner.adaptive_query_limits(), {"standard": 60, "first": 4})
@@ -1390,7 +1390,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('cron: "17 */6 * * *"', workflow)
         self.assertIn('cron: "47 * * * *"', workflow)
         readme = (ROOT / "README.md").read_text()
-        self.assertIn("800 + 40", readme)
+        self.assertIn("800 + 150", readme)
         self.assertIn("cogodzinny retry", readme)
 
     def test_telegram_feedback_has_fast_separate_workflow(self):
