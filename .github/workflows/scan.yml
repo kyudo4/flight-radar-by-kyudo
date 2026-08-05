@@ -50,9 +50,9 @@ jobs:
           # Main scans use the full safe budget. The hourly recovery runner
           # gets a deliberately smaller budget so a parser failure does not
           # turn every hour into another full Google sweep.
-          MAX_STANDARD_QUERIES: ${{ github.event.schedule == '47 * * * *' && '80' || '800' }}
+          MAX_STANDARD_QUERIES: ${{ github.event.schedule == '47 * * * *' && '300' || '800' }}
           MAX_FIRST_QUERIES: ${{ github.event.schedule == '47 * * * *' && '30' || '150' }}
-          MAX_STANDARD_CEILING: ${{ github.event.schedule == '47 * * * *' && '80' || '800' }}
+          MAX_STANDARD_CEILING: ${{ github.event.schedule == '47 * * * *' && '300' || '800' }}
           MAX_FIRST_CEILING: ${{ github.event.schedule == '47 * * * *' && '30' || '150' }}
           GOOGLE_REQUEST_DELAY_SECONDS: "1.5"
           MAX_SCAN_RUNTIME_SECONDS: "3000"

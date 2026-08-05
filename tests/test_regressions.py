@@ -1408,6 +1408,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('MAX_SCAN_RUNTIME_SECONDS: "3000"', workflow)
         self.assertIn('cron: "17 */6 * * *"', workflow)
         self.assertIn('cron: "47 * * * *"', workflow)
+        self.assertIn("github.event.schedule == '47 * * * *' && '300' || '800'", workflow)
+        self.assertIn("github.event.schedule == '47 * * * *' && '30' || '150'", workflow)
         readme = (ROOT / "README.md").read_text()
         self.assertIn("800 + 150", readme)
         self.assertIn("cogodzinny retry", readme)

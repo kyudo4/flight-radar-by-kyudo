@@ -156,7 +156,7 @@ Kolejka jest stronicowana,
 więc duża liczba monitorów nie ucina jej po pierwszych 20 000 rekordów.
 
 Standardowy limit głównego skanu wynosi obecnie 800 zapytań. Cogodzinny proces naprawczy
-ma osobny, mniejszy budżet 80 + 30 First, aby ponawiać błędne pozycje bez uruchamiania kolejnego
+ma osobny, mniejszy budżet 300 + 30 First, aby ponawiać błędne pozycje bez uruchamiania kolejnego
 pełnego przebiegu. Przycisk administratora „Uruchom zaległe skany” wymusza tylko oczekujące
 pozycje, a „Przeskanuj pełną kolejkę” przechodzi bieżącą kolejkę w ramach limitu 800 + 150.
 Po pierwszym 403/429/503, CAPTCHA albo consent wall bieżący przebieg
