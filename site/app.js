@@ -451,7 +451,7 @@
         renderOffers();
         const last = offers[0]?.updated_at;
         const telegramStatus = telegramConnectionReady ? "✅ Telegram połączony" : "⚠️ Telegram niepołączony — otwórz bota i wyślij /start";
-        $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: 4 razy na dobę</span><span>${telegramStatus}</span>`;
+        $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatnia oferta:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak aktualnych ofert"}</span><span>⏱ Skan Google: 4 razy na dobę</span><span>${telegramStatus}</span>`;
         return;
       }
       const { data: matches, error: matchError } = await client.from("user_matches")
@@ -498,7 +498,7 @@
       renderOffers();
       const last = offers[0]?.updated_at;
       const telegramStatus = telegramConnectionReady ? "✅ Telegram połączony" : "⚠️ Telegram niepołączony — otwórz bota i wyślij /start";
-      $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: 4 razy na dobę</span><span>${telegramStatus}</span>`;
+      $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatnia oferta:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak aktualnych ofert"}</span><span>⏱ Skan Google: 4 razy na dobę</span><span>${telegramStatus}</span>`;
     } finally {
       offersLoading = false;
       button.disabled = false;
