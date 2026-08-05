@@ -220,13 +220,14 @@ def _best_value(flights):
                                     f["price_pln"]))
 
 
-def cheapest_picks(flights, priority_codes, max_options=3):
+def cheapest_picks(flights, priority_codes, max_options=None):
     """Najlepsze warianty różnych przewoźników.
 
     Google Flights potrafi pokazać tańszą linię po poprzednim skanie. Dlatego
-    nie zapisujemy już tylko jednej oferty ogółem i jednej priorytetowej:
-    dla każdej linii wybieramy najrozsądniejszy wariant, zapisujemy kilka
-    najtańszych linii oraz dodatkowo linię priorytetową, jeśli jej brakuje.
+    dla każdej linii wybieramy najrozsądniejszy wariant. Domyślnie zwracamy
+    najlepszy wariant każdej znalezionej linii; filtrowanie budżetu, czasu i
+    przesiadek odbywa się dopiero po tej funkcji. Dzięki temu trzy droższe
+    linie priorytetowe nie mogą ukryć czwartej, tańszej linii.
     """
     if not flights:
         return []
@@ -246,6 +247,10 @@ def cheapest_picks(flights, priority_codes, max_options=3):
                                    f["stops"] if f["stops"] is not None else 9))
     non_priorities.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
                                        f["stops"] if f["stops"] is not None else 9))
+    if max_options is None:
+        return priorities + non_priorities
+    # Compatibility for callers that intentionally request a bounded preview;
+    # the production scanner never uses this cap before applying user filters.
     priority_picks = priorities[:max_options]
     picks = priority_picks + non_priorities[:max(0, max_options - len(priority_picks))]
     return picks

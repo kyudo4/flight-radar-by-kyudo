@@ -465,7 +465,11 @@
     $("offerList").innerHTML = filtered.length ? filtered.map(renderOffer).join("") : `<div class="empty">${offers.length ? "Brak ofert mieszczących się w budżecie i pozostałych filtrach." : "Brak dopasowanych ofert. Skaner uzupełni je po uruchomieniu własnego monitoringu."}</div>`;
     document.querySelectorAll("[data-feedback]").forEach(btn => btn.onclick = () => sendFeedback(btn.dataset.feedback, btn.dataset.match));
   }
-  function isOfferStale(offer) { return offer.verification_status === "stale" || (offer.last_seen_at && Date.now() - new Date(offer.last_seen_at).getTime() > 24 * 3600000); }
+  // An old timestamp alone is not proof that a fare disappeared: the shared
+  // queue may still be working through a partial run. The scanner marks an
+  // offer stale only after a complete healthy source pass, so the UI must use
+  // that authoritative status instead of hiding offers after 24 hours.
+  function isOfferStale(offer) { return offer.verification_status === "stale"; }
   function renderPriceHistory(offer) {
     const rows = (priceHistory[offer.id] || []).filter(row => Number(row.price_pln) > 0).slice(0, 12).reverse();
     if (!rows.length) return "";
@@ -534,6 +538,13 @@
   async function loadAdmin() {
     const { data, error } = await client.from("profiles").select("id,email,display_name,telegram_user_id,status,role,last_seen_at,created_at").order("created_at"); if (error) throw error;
     const users = data || []; $("seatCount").textContent = `${users.filter(x => x.status === "active").length}/10 aktywnych`; $("userList").innerHTML = users.map(u => `<div class="user-row"><span><strong>${esc(u.display_name || u.email || "Telegram użytkownik")}</strong><br><small class="muted">Telegram ID: ${esc(u.telegram_user_id || "—")}</small></span><span class="status-${esc(u.status)}">${esc(u.status)}</span>${u.id === user.id ? "<span class='muted'>Ty</span>" : `<button class="secondary" data-user="${u.id}" data-status="${u.status}" data-action="toggle-user">${u.status === "active" ? "Zawieś" : "Aktywuj"}</button><button class="danger" data-user="${u.id}" data-action="delete-user">Usuń</button>`}</div>`).join("");
+    const delivery = await client.rpc("admin_delivery_summary");
+    if (!delivery.error && delivery.data) {
+      const summary = delivery.data;
+      $("deliverySummary").textContent = `Telegram: ${Number(summary.pending || 0)} oczekujących · ${Number(summary.sent_24h || 0)} wysłanych w 24 h · ${Number(summary.failed || 0)} trwale nieudanych`;
+    } else {
+      $("deliverySummary").textContent = "Telegram: kolejka dostarczania zostanie pokazana po wdrożeniu migracji.";
+    }
     document.querySelectorAll("[data-action='toggle-user']").forEach(btn => btn.onclick = async () => { const next = btn.dataset.status === "active" ? "suspended" : "active"; const result = await client.rpc("set_profile_status", { target_id: btn.dataset.user, next_status: next }); if (result.error || result.data !== true) alert(result.error?.message || "Nie zmieniono statusu."); else await loadAdmin(); });
     document.querySelectorAll("[data-action='delete-user']").forEach(btn => btn.onclick = async () => { if (!confirm("Usunąć konto, jego monitory i alerty? Tego nie można cofnąć.")) return; const result = await client.rpc("admin_delete_profile", { target_id: btn.dataset.user }); if (result.error || result.data !== true) alert(result.error?.message || "Nie usunięto konta."); else await loadAdmin(); });
     $("inviteButton").onclick = createInvite;

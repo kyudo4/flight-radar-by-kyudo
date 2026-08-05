@@ -141,6 +141,29 @@ create table public.telegram_connections (
   last_update_id bigint not null default 0
 );
 
+-- Durable delivery queue.  A Google scan only creates a pending message;
+-- Telegram delivery is retried independently and is acknowledged only after
+-- Telegram returns ok=true.
+create table public.telegram_outbox (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  monitor_id uuid not null references public.monitors(id) on delete cascade,
+  match_id uuid not null references public.user_matches(id) on delete cascade,
+  chat_id text not null,
+  dedupe_key text not null unique,
+  price_pln integer not null check (price_pln > 0),
+  generation bigint not null default 0,
+  message_text text not null,
+  reply_markup jsonb not null default '{}'::jsonb,
+  status text not null default 'pending' check (status in ('pending', 'sending', 'retry', 'sent', 'dead')),
+  attempts integer not null default 0 check (attempts >= 0),
+  available_at timestamptz not null default now(),
+  sent_at timestamptz,
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table public.telegram_state (
   id integer primary key default 1 check (id = 1),
   update_offset bigint not null default 0
@@ -338,6 +361,8 @@ create index matches_user_idx on public.user_matches(user_id, updated_at desc);
 create index scan_runs_started_idx on public.scan_runs(started_at desc);
 create index telegram_auth_attempts_lookup_idx on public.telegram_auth_attempts(telegram_user_id, attempted_at desc);
 create index user_preference_signals_user_idx on public.user_preference_signals(user_id, updated_at desc);
+create index telegram_outbox_delivery_idx on public.telegram_outbox(status, available_at, created_at);
+create index telegram_outbox_user_idx on public.telegram_outbox(user_id, created_at desc);
 
 create or replace function public.is_admin()
 returns boolean language sql stable security definer set search_path = public as $$
@@ -499,6 +524,12 @@ as $$
   select exists (
     select 1
     from public.flight_offers offer
+    cross join lateral (select coalesce(offer.raw ->> 'outbound_duration_h',
+                                         case when offer.duration_minutes is not null
+                                              then (offer.duration_minutes::numeric / 60)::text end) as outbound_duration,
+                               coalesce(offer.raw ->> 'return_duration_h', '') as return_duration,
+                               coalesce(offer.raw ->> 'outbound_stops', offer.stops::text) as outbound_stops,
+                               coalesce(offer.raw ->> 'return_stops', '') as return_stops) legs
     where offer.id = p_offer_id
       and offer.origin in (
         select value from jsonb_array_elements_text(coalesce(p_filters -> 'origins', '[]'::jsonb)) as origins(value)
@@ -527,17 +558,14 @@ as $$
       )
       and offer.price_pln is not null
       and offer.price_pln <= coalesce((p_filters ->> 'budget_pln')::numeric, 0)
-      and (
-        nullif(trim(p_filters ->> 'max_duration_h'), '') is null
-        or offer.duration_minutes is not null
-           and offer.duration_minutes <= nullif(trim(p_filters ->> 'max_duration_h'), '')::numeric * 60
-      )
-      and offer.stops is not null
-      and offer.stops <= coalesce((p_filters ->> 'max_stops')::integer, 2)
-      and (
-        coalesce((p_filters ->> 'direct_only')::boolean, false) is false
-        or offer.stops = 0
-      )
+      and (nullif(trim(p_filters ->> 'max_duration_h'), '') is null
+        or (legs.outbound_duration <> '' and legs.outbound_duration::numeric <= nullif(trim(p_filters ->> 'max_duration_h'), '')::numeric)
+        and (offer.trip_type = 'one_way' or (legs.return_duration <> '' and legs.return_duration::numeric <= nullif(trim(p_filters ->> 'max_duration_h'), '')::numeric)))
+      and (nullif(trim(p_filters ->> 'max_stops'), '') is null
+        or (legs.outbound_stops <> '' and legs.outbound_stops::integer <= coalesce((p_filters ->> 'max_stops')::integer, 2))
+        and (offer.trip_type = 'one_way' or (legs.return_stops <> '' and legs.return_stops::integer <= coalesce((p_filters ->> 'max_stops')::integer, 2))))
+      and (coalesce((p_filters ->> 'direct_only')::boolean, false) is false
+        or (legs.outbound_stops = '0' and (offer.trip_type = 'one_way' or legs.return_stops = '0')))
       and not exists (
         select 1
         from jsonb_array_elements_text(coalesce(p_filters -> 'excluded_airlines', '[]'::jsonb)) as excluded(value)
@@ -738,6 +766,46 @@ begin
 end;
 $$;
 
+create or replace function public.claim_telegram_outbox(p_limit integer default 50)
+returns setof public.telegram_outbox
+language plpgsql security definer set search_path = public as $$
+begin
+  return query
+  with candidates as (
+    select id
+    from public.telegram_outbox
+    where (
+        status in ('pending', 'retry') and available_at <= now()
+      ) or (
+        status = 'sending' and updated_at <= now() - interval '15 minutes'
+      )
+    order by available_at asc, created_at asc, id asc
+    limit greatest(1, least(coalesce(p_limit, 50), 200))
+    for update skip locked
+  )
+  update public.telegram_outbox outbox
+  set status = 'sending',
+      attempts = outbox.attempts + 1,
+      updated_at = now()
+  from candidates
+  where outbox.id = candidates.id
+  returning outbox.*;
+end;
+$$;
+
+create or replace function public.admin_delivery_summary()
+returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'pending', count(*) filter (where status in ('pending', 'retry', 'sending')),
+    'sent_24h', count(*) filter (where status = 'sent' and sent_at >= now() - interval '24 hours'),
+    'failed', count(*) filter (where status = 'dead'),
+    'last_sent_at', max(sent_at)
+  )
+  from public.telegram_outbox
+  where public.is_admin();
+$$;
+
 create or replace function public.cleanup_retention()
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
@@ -903,6 +971,44 @@ revoke all on function public.reserve_scan_slot() from public, anon, authenticat
 grant execute on function public.reserve_scan_slot() to service_role;
 revoke all on function public.cleanup_retention() from public, anon, authenticated;
 grant execute on function public.cleanup_retention() to service_role;
+revoke all on function public.claim_telegram_outbox(integer) from public, anon, authenticated;
+grant execute on function public.claim_telegram_outbox(integer) to service_role;
+revoke all on function public.admin_delivery_summary() from public, anon;
+grant execute on function public.admin_delivery_summary() to authenticated;
+
+create or replace function public.complete_telegram_outbox(p_outbox_id uuid)
+returns boolean
+language plpgsql security definer set search_path = public as $$
+declare
+  completed boolean := false;
+begin
+  update public.user_matches matches
+  set notified_at = now(),
+      last_notified_price = outbox.price_pln,
+      notified_generation = outbox.generation,
+      updated_at = now()
+  from public.telegram_outbox outbox
+  where outbox.id = p_outbox_id
+    and outbox.status = 'sending'
+    and matches.id = outbox.match_id;
+
+  if not found then
+    return false;
+  end if;
+
+  update public.telegram_outbox
+  set status = 'sent',
+      sent_at = now(),
+      last_error = null,
+      updated_at = now()
+  where id = p_outbox_id
+    and status = 'sending';
+  completed := found;
+  return completed;
+end;
+$$;
+revoke all on function public.complete_telegram_outbox(uuid) from public, anon, authenticated;
+grant execute on function public.complete_telegram_outbox(uuid) to service_role;
 revoke all on function public.preference_verdict_delta(text, text) from public, anon, authenticated;
 revoke all on function public.preference_signal_score(text, integer, integer) from public, anon, authenticated;
 revoke all on function public.capture_feedback_preference() from public, anon, authenticated;
@@ -1125,6 +1231,7 @@ alter table public.offer_price_history enable row level security;
 alter table public.offer_mutes enable row level security;
 alter table public.user_matches enable row level security;
 alter table public.telegram_connections enable row level security;
+alter table public.telegram_outbox enable row level security;
 alter table public.telegram_state enable row level security;
 alter table public.telegram_auth_attempts enable row level security;
 revoke all on table public.telegram_auth_attempts from public, anon, authenticated;
@@ -1145,6 +1252,7 @@ create policy matches_owner_read on public.user_matches for select to authentica
 create policy matches_owner_update on public.user_matches for update to authenticated using (public.is_active_user(user_id) and user_id = auth.uid() and public.match_within_monitor_budget(id)) with check (public.is_active_user(user_id) and user_id = auth.uid() and public.match_within_monitor_budget(id));
 create policy connections_self_read on public.telegram_connections for select to authenticated using (public.is_active_user(user_id) and user_id = auth.uid());
 create policy connections_self_delete on public.telegram_connections for delete to authenticated using (public.is_active_user(user_id) and user_id = auth.uid());
+create policy telegram_outbox_admin_read on public.telegram_outbox for select to authenticated using (public.is_admin());
 create policy telegram_state_admin_read on public.telegram_state for select to authenticated using (public.is_admin());
 create policy scan_runs_admin_read on public.scan_runs for select to authenticated using (public.is_admin());
 create policy feedback_owner_all on public.feedback for all to authenticated using (public.is_active_user(user_id) and user_id = auth.uid()) with check (

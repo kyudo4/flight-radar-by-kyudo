@@ -16,6 +16,7 @@ import google_parser
 import rss
 import telegram_feedback
 import telegram_io
+import telegram_delivery
 
 
 class FlightRadarRegressionTests(unittest.TestCase):
@@ -721,11 +722,11 @@ class FlightRadarRegressionTests(unittest.TestCase):
             "_monitor_generation": 2,
         }
         offer = {"price_pln": 1300, "tags": []}
-        monitor = {"filters": {"budget_pln": 2000}, "telegram_rules": {"drop_percent": 10}}
-        with patch.object(scanner, "telegram", return_value={"ok": True}) as telegram, patch.object(scanner, "api") as api:
+        monitor = {"id": "monitor-scope", "user_id": "user-1",
+                   "filters": {"budget_pln": 2000}, "telegram_rules": {"drop_percent": 10}}
+        with patch.object(scanner, "api") as api:
             self.assertTrue(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
-        telegram.assert_called_once()
-        self.assertEqual(api.call_args.kwargs["body"]["notified_generation"], 2)
+        self.assertEqual(api.call_args.kwargs["body"]["generation"], 2)
 
     def test_user_preferred_airline_increases_offer_score(self):
         flight = {"airline": "SQ", "airline_name": "Singapore Airlines", "price_pln": 5000, "duration_h": 14, "stops": 1}
@@ -1084,13 +1085,18 @@ class FlightRadarRegressionTests(unittest.TestCase):
                 return [{"chat_id": "123"}]
             return []
 
-        with patch.object(scanner, "api", side_effect=fake_api), patch.object(scanner, "telegram") as telegram:
+        api_calls = []
+        def recording_api(method, path, body=None, params=None):
+            api_calls.append((method, path, body, params))
+            return fake_api(method, path, body, params)
+
+        with patch.object(scanner, "api", side_effect=recording_api):
             added, sent = scanner.process_candidate(
                 monitor, task, flight, previous=previous, preferences=[], market_prices=market
             )
         self.assertEqual((added, sent), (1, 1))
         self.assertFalse(saved_match["new_airline"])
-        telegram.assert_called_once()
+        self.assertTrue(any(path == "telegram_outbox" for _, path, _, _ in api_calls))
 
     def test_source_error_routes_are_limited_to_the_current_streak(self):
         count, routes = scanner.reset_source_error_streak()
@@ -1259,16 +1265,43 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertNotIn("telegramImmediate", app)
         self.assertNotIn("telegram-all-alerts", html)
 
+    def test_telegram_delivery_uses_durable_outbox_and_atomic_completion(self):
+        row = {"id": "outbox-1", "chat_id": "123", "message_text": "alert",
+               "reply_markup": {}, "match_id": "match-1", "price_pln": 3500,
+               "generation": 2, "attempts": 1}
+        calls = []
+
+        def fake_api(method, path, body=None, params=None):
+            calls.append((method, path, body, params))
+            if method == "POST" and path == "rpc/claim_telegram_outbox":
+                return [row]
+            if method == "POST" and path == "rpc/complete_telegram_outbox":
+                return True
+            return []
+
+        with patch.object(telegram_delivery, "api", side_effect=fake_api), \
+             patch.object(telegram_delivery, "telegram", return_value={"ok": True}):
+            result = telegram_delivery.deliver_pending()
+        self.assertEqual(result["sent"], 1)
+        self.assertTrue(any(path == "rpc/complete_telegram_outbox" for _, path, _, _ in calls))
+
+    def test_outbox_duplicate_enqueue_never_reopens_a_sent_alert(self):
+        source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260805000500_alert_delivery_and_filter_integrity.sql").read_text()
+        self.assertIn('"_resolution": "ignore-duplicates"', source)
+        self.assertIn("status = 'sending' and updated_at <= now() - interval '15 minutes'", migration)
+        self.assertIn("complete_telegram_outbox", migration)
+
     def test_low_rated_matching_offer_is_still_telegram_eligible(self):
         match = {"id": "match-low", "stars": 1, "telegram_eligible": True,
                  "new_airline": True, "last_notified_price": None}
         offer = {"price_pln": 4500, "tags": [], "route": "WAW → BKK", "purchase_link_verified": True,
                  "cabin": "ECONOMY", "airline_name": "Air China",
                  "travel_date": "2026-10-22", "link": "https://example.com"}
-        monitor = {"filters": {"budget_pln": 5000},
+        monitor = {"id": "monitor-low", "user_id": "user-1",
+                   "filters": {"budget_pln": 5000},
                    "telegram_rules": {"min_stars": 5, "drop_percent": 10}}
-        with patch.object(scanner, "telegram", return_value={"ok": True}), \
-             patch.object(scanner, "api") as api:
+        with patch.object(scanner, "api") as api:
             self.assertTrue(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
         api.assert_called_once()
 
@@ -1363,7 +1396,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260805-2', html)
+        self.assertIn('app.js?v=20260805-3', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1605,8 +1638,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260805-2', html)
-        self.assertIn('styles.css?v=20260804-12', html)
+        self.assertIn('app.js?v=20260805-3', html)
+        self.assertIn('styles.css?v=20260805-13', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1661,10 +1694,11 @@ class FlightRadarRegressionTests(unittest.TestCase):
                  "cabin": "BUSINESS", "airline_name": "Qatar Airways",
                  "travel_date": "2026-09-02", "link": "https://www.google.com/travel/flights",
                  "raw": {"purchase_link_verified": False}}
-        monitor = {"filters": {"budget_pln": 5000}, "telegram_rules": {"drop_percent": 10}}
-        with patch.object(scanner, "telegram") as telegram, patch.object(scanner, "api"):
+        monitor = {"id": "monitor-unverified", "user_id": "user-1",
+                   "filters": {"budget_pln": 5000}, "telegram_rules": {"drop_percent": 10}}
+        with patch.object(scanner, "api") as api:
             self.assertTrue(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
-        telegram.assert_called_once()
+        api.assert_called_once()
 
     def test_google_candidate_can_alert_without_browser_purchase_verification(self):
         monitor = {"id": "monitor-verify", "user_id": "user-1",

@@ -17,6 +17,7 @@ from pathlib import Path
 import gflights
 import rss
 import telegram_io
+import telegram_delivery
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -114,8 +115,9 @@ def api(method, path, body=None, params=None):
     if not SUPABASE_URL or not SERVICE_KEY:
         raise RuntimeError("Brak SUPABASE_URL albo SUPABASE_SERVICE_ROLE_KEY")
     url = SUPABASE_URL + "/rest/v1/" + path
-    if params:
-        url += "?" + urllib.parse.urlencode(params, doseq=True)
+    query_params = {key: value for key, value in (params or {}).items() if not str(key).startswith("_")}
+    if query_params:
+        url += "?" + urllib.parse.urlencode(query_params, doseq=True)
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("apikey", SERVICE_KEY)
@@ -125,7 +127,8 @@ def api(method, path, body=None, params=None):
     if body is not None:
         preference = "return=representation"
         if params and "on_conflict" in params:
-            preference = "resolution=merge-duplicates,return=representation"
+            resolution = params.get("_resolution", "merge-duplicates")
+            preference = "resolution=%s,return=representation" % resolution
         req.add_header("Prefer", preference)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -360,6 +363,10 @@ class ScanSourceRun(RuntimeError):
 
 class ScanPartialRun(RuntimeError):
     """Sprawdzony częściowo przebieg musi być widoczny jako nieudany w CI."""
+
+
+class CandidateVerificationDeferred(RuntimeError):
+    """The candidate may fit, but the exact rendered source must be retried."""
 
 
 def force_due_scan_items(monitors, now):
@@ -730,8 +737,13 @@ def verified_candidate(flight, task, verification_cache):
                 task["origin"], task["dest"], task["date"],
                 seat=task["cabin"], return_date=task.get("return_date"))
         except Exception as exc:
-            verification_cache[key] = []
-            log("Nie udało się potwierdzić dokładnej rezerwacji %s: %s" % (key, str(exc)[:160]))
+            # A capacity, CAPTCHA or transient renderer failure is not proof
+            # that the candidate is invalid. Propagate it so the queue item is
+            # retried instead of being marked successfully scanned.
+            raise CandidateVerificationDeferred(
+                "Nie udało się potwierdzić dokładnej rezerwacji %s: %s"
+                % (key, str(exc)[:160])
+            ) from exc
     for candidate in verification_cache[key]:
         if same_verified_offer(candidate, flight):
             return {**flight, **candidate, "purchase_link_verified": True}
@@ -1176,14 +1188,32 @@ def send_due_alert(match, offer, monitor, connection):
     immediate_new_low = not same_offer
     if not is_drop and not is_new_airline and not is_new_filter_scope and not pending_unnotified and not (is_new_low and immediate_new_low):
         return False
-    sent = telegram("sendMessage", {"chat_id": connection["chat_id"], "text": alert_text(offer, stars, match["id"]), "parse_mode": "HTML", "disable_web_page_preview": False, "reply_markup": {"inline_keyboard": [[{"text": "👍 Kupiłbym", "callback_data": "fb|%s|buy" % match["id"]}, {"text": "💸 Za drogo", "callback_data": "fb|%s|expensive" % match["id"]}], [{"text": "🙅 Nie interesuje", "callback_data": "fb|%s|skip" % match["id"]}, {"text": "⏱ Za długo", "callback_data": "fb|%s|toolong" % match["id"]}, {"text": "✈️ Zła linia", "callback_data": "fb|%s|badairline" % match["id"]}]]}})
-    if not sent or not sent.get("ok"):
-        raise RuntimeError("Telegram nie potwierdził wysłania alertu")
-    api("PATCH", "user_matches", body={
-        "notified_at": datetime.utcnow().isoformat() + "Z",
-        "last_notified_price": price,
-        "notified_generation": int(match.get("_monitor_generation") or 0),
-    }, params={"id": "eq." + match["id"]})
+    markup = {"inline_keyboard": [[
+        {"text": "👍 Kupiłbym", "callback_data": "fb|%s|buy" % match["id"]},
+        {"text": "💸 Za drogo", "callback_data": "fb|%s|expensive" % match["id"]},
+    ], [
+        {"text": "🙅 Nie interesuje", "callback_data": "fb|%s|skip" % match["id"]},
+        {"text": "⏱ Za długo", "callback_data": "fb|%s|toolong" % match["id"]},
+        {"text": "✈️ Zła linia", "callback_data": "fb|%s|badairline" % match["id"]},
+    ]]}
+    generation = int(match.get("_monitor_generation") or 0)
+    dedupe_key = "%s:%s:%s" % (match["id"], price, generation)
+    api("POST", "telegram_outbox", body={
+        "user_id": monitor["user_id"],
+        "monitor_id": monitor["id"],
+        "match_id": match["id"],
+        "chat_id": connection["chat_id"],
+        "dedupe_key": dedupe_key,
+        "price_pln": price,
+        "generation": generation,
+        "message_text": alert_text(offer, stars, match["id"]),
+        "reply_markup": markup,
+        "status": "pending",
+        "available_at": datetime.utcnow().isoformat() + "Z",
+    }, params={"on_conflict": "dedupe_key", "_resolution": "ignore-duplicates"})
+    # Delivery is acknowledged by telegram_delivery.py, not by queue creation.
+    # Keeping notified_at null makes the outbox and panel truthful if the bot
+    # is temporarily unavailable.
     return True
 
 
@@ -1434,7 +1464,11 @@ def main():
                         code = gflights.airline_code(str(airline))
                         if code:
                             preferred_codes.add(code)
-                for flight in gflights.cheapest_picks(flights, preferred_codes, max_options=3):
+                # Select one representative per airline, but do not cap the
+                # number of airlines before applying each user's filters. A
+                # cheap non-priority fare must not disappear because three
+                # more expensive priority carriers were returned first.
+                for flight in gflights.cheapest_picks(flights, preferred_codes):
                     for monitor in related:
                         try:
                             if monitor["id"] not in history_cache:
@@ -1450,6 +1484,11 @@ def main():
                         except Exception as exc:
                             task_errors.append("%s-%s-%s/%s: %s" % (task["origin"], task["dest"], task["date"], monitor["id"], str(exc)[:120]))
                             log("Pominięto ofertę po błędzie zapisu/alertu: %s" % task_errors[-1])
+                            # A candidate/database/verification failure means
+                            # the source query was not fully processed. Keep
+                            # the queue item due for the hourly retry instead
+                            # of advancing it by the normal six-hour interval.
+                            task_failed = True
             finally:
                 # Keep the inter-request throttle active after parse/network
                 # errors too. A malformed Google response must not turn into
@@ -1494,6 +1533,15 @@ def main():
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
+        try:
+            delivery = telegram_delivery.deliver_pending()
+            log("Telegram: wysłano %d, ponowienia %d, trwale odrzucone %d" % (
+                delivery.get("sent", 0), delivery.get("retried", 0), delivery.get("dead", 0)))
+        except Exception as exc:
+            # The outbox remains durable; a separate Telegram workflow will
+            # retry it. Do not turn a successful Google scan into a source
+            # failure merely because Telegram is temporarily unavailable.
+            log("Nie udało się opróżnić kolejki Telegrama: %s" % str(exc)[:160])
         for monitor in active:
             refresh_monitor_status(monitor["id"])
         source_unavailable = executed_count > 0 and failed_google_tasks > 0 and successful_google_tasks == 0
@@ -1532,7 +1580,7 @@ def main():
             "blocked": blocked,
             "error": " | ".join(task_errors)[:500] or None,
         }, params={"id": "eq." + run["id"]})
-        log("Oferty: %d, alerty Telegram: %d" % (offers_count, sent_count))
+        log("Oferty: %d, alerty Telegram dodane do kolejki: %d" % (offers_count, sent_count))
         if blocked:
             raise ScanBlockedRun("Google zablokował skan; kolejny przebieg pozostaje na bezpiecznym limicie")
         if source_unavailable:
