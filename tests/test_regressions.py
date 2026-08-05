@@ -686,6 +686,9 @@ class FlightRadarRegressionTests(unittest.TestCase):
             previous, "WAW → BKK", "ECONOMY", "G9", "2026-10-27", 1300,
             baseline_after="2026-08-05T00:00:00Z",
         ))
+        self.assertTrue(scanner.offer_seen_after_filter_change(
+            previous[0]["flight_offers"], "2026-08-05T00:00:00Z"
+        ))
 
     def test_exact_ten_percent_drop_is_eligible(self):
         self.assertTrue(scanner.price_drop_eligible(5000, 4500, 10))

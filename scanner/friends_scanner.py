@@ -1091,6 +1091,20 @@ def airline_identity(flight):
     return " ".join(str(flight.get("airline_name") or "").lower().split())
 
 
+def offer_seen_after_filter_change(offer, baseline_after):
+    if not baseline_after:
+        return True
+    seen_at = (offer or {}).get("first_seen_at")
+    if not seen_at:
+        return False
+    try:
+        seen = datetime.fromisoformat(str(seen_at).replace("Z", "+00:00"))
+        changed = datetime.fromisoformat(str(baseline_after).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return seen >= changed
+
+
 def historical_duplicate(previous, route, cabin, airline, travel_date, price,
                          return_date=None, trip_type_value="one_way",
                          baseline_after=None):
@@ -1099,21 +1113,11 @@ def historical_duplicate(previous, route, cabin, airline, travel_date, price,
     prices = []
     for old in previous:
         offer = old.get("flight_offers") or {}
-        if baseline_after:
-            # After a monitor edit, offers seen before the new filter scope
-            # must not suppress newly discovered dates at the same price.
-            # Missing/invalid legacy timestamps are treated as old and are
-            # therefore excluded from this post-edit baseline.
-            seen_at = offer.get("first_seen_at")
-            if not seen_at:
-                continue
-            try:
-                seen = datetime.fromisoformat(str(seen_at).replace("Z", "+00:00"))
-                changed = datetime.fromisoformat(str(baseline_after).replace("Z", "+00:00"))
-            except (TypeError, ValueError):
-                continue
-            if seen < changed:
-                continue
+        # After a monitor edit, offers seen before the new filter scope must
+        # not suppress newly discovered dates at the same price. Missing or
+        # invalid legacy timestamps are treated as old in this comparison.
+        if baseline_after and not offer_seen_after_filter_change(offer, baseline_after):
+            continue
         old_cabin = str(offer.get("cabin") or "").upper().replace("-", "_")
         old_trip = offer.get("trip_type") or ("round_trip" if offer.get("return_date") else "one_way")
         exact_same_query = offer.get("travel_date") == travel_date and offer.get("return_date") == return_date
@@ -1200,6 +1204,7 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     route_prices = list(market_prices or [])
     matching_feedback = []
     route_airlines = set()
+    filter_baseline = monitor.get("filters_changed_at")
     for old in active_previous if airline else []:
         old_offer = old.get("flight_offers") or {}
         old_airline = airline_identity(old_offer)
@@ -1207,7 +1212,9 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
         old_trip = old_offer.get("trip_type") or ("round_trip" if old_offer.get("return_date") else "one_way")
         same_route_kind = old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value
         same_month = not old_offer.get("travel_date") or old_offer.get("travel_date", "")[:7] == task["date"][:7]
-        if same_route_kind:
+        exact_same_query = old_offer.get("travel_date") == task["date"] and old_offer.get("return_date") == return_date
+        in_current_filter_scope = exact_same_query or offer_seen_after_filter_change(old_offer, filter_baseline)
+        if same_route_kind and in_current_filter_scope:
             route_airlines.add(old_airline)
         if same_route_kind and same_month:
             historical_price = old_offer.get("price_pln")
@@ -1218,7 +1225,9 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
                     "price_pln": historical_price,
                     "_market_key": old_offer.get("fingerprint") or "history:%s" % (old.get("offer_id") or old.get("id") or "unknown"),
                 })
-        if old_offer.get("route") == route and old_cabin == cabin and old_trip == trip_type_value and old_offer.get("return_date") == return_date and old_airline == airline:
+        if (old_offer.get("route") == route and old_cabin == cabin
+                and old_trip == trip_type_value and old_offer.get("return_date") == return_date
+                and old_airline == airline and in_current_filter_scope):
             if old.get("feedback"):
                 matching_feedback.append(old["feedback"])
             for value in (old_offer.get("price_pln"), old.get("min_price_for_user")):
