@@ -459,7 +459,15 @@ def fetch_rendered(url, return_date=None):
         try:
             if not _click_card(page, outbound["_label"]):
                 raise BrowserParseError("Nie znaleziono wybranej karty wylotowej Google")
-            page.get_by_role("heading", name="Returning flights", exact=True).wait_for(timeout=25000)
+            try:
+                page.get_by_role("heading", name="Returning flights", exact=True).wait_for(timeout=25000)
+            except Exception:
+                # The heading is not stable across Google's UI variants. If
+                # the actual return cards are already present, accept them
+                # instead of turning a harmless copy change into a parse
+                # failure.
+                if not _wait_for_cards(page, timeout_ms=10000):
+                    raise BrowserParseError("Google nie wyrenderował kart powrotnych")
             return_url = page.url
             return_attempts += 1
             inbound_cards = _load_cards(page, return_url, returning=True)

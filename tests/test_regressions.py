@@ -422,6 +422,31 @@ class FlightRadarRegressionTests(unittest.TestCase):
             with self.assertRaises(google_browser.BrowserNoFlightsError):
                 google_browser.fetch_rendered("https://google.test", return_date="2027-03-12")
 
+    def test_round_trip_picker_accepts_return_cards_when_heading_copy_changes(self):
+        outbound = [{"airline_name": "Air France", "price_pln": 4500,
+                     "duration_h": 13.0, "stops": 1, "departure": "10:00 → 20:00",
+                     "_label": "outbound"}]
+        inbound = [{"airline_name": "Air France", "price_pln": 4500,
+                    "duration_h": 14.0, "stops": 1, "departure": "09:00 → 19:00",
+                    "_label": "return"}]
+
+        class ChangedHeadingPage:
+            url = "https://google.test/return"
+
+            def get_by_role(self, role, **kwargs):
+                class Locator:
+                    def wait_for(self, timeout=None): raise RuntimeError("changed heading")
+                    def count(self): return 0
+                return Locator()
+
+        with patch.object(google_browser, "_page", return_value=ChangedHeadingPage()), \
+             patch.object(google_browser, "_load_cards", side_effect=[outbound, outbound, inbound, inbound]), \
+             patch.object(google_browser, "_wait_for_cards", return_value=["return"]), \
+             patch.object(google_browser, "_click_card", return_value=True), \
+             patch.object(google_browser, "_selected_itinerary_link", return_value="https://google.test/travel/flights/booking"):
+            result = google_browser.fetch_rendered("https://google.test", return_date="2027-03-12")
+        self.assertTrue(result[0]["round_trip_verified"])
+
     def test_no_flights_fallback_is_returned_as_an_empty_result(self):
         with patch.object(gflights, "_fetch_server", side_effect=gflights.SourceParseError("payload moved")), \
              patch.object(gflights.google_browser, "fetch_rendered", side_effect=google_browser.BrowserNoFlightsError("empty")):
