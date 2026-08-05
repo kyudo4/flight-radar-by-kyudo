@@ -762,6 +762,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
             self.assertTrue(scanner.send_due_alert(match, offer, monitor, {"chat_id": "123"}))
         self.assertEqual(api.call_args.kwargs["body"]["generation"], 2)
 
+    def test_existing_offers_are_reconciled_before_pagination_and_scan(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260805000700_reconcile_existing_offers.sql").read_text()
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn("reconcile_monitor_offers", migration)
+        self.assertIn("get_my_offer_matches", migration)
+        self.assertIn('"rpc/reconcile_monitor_offers"', scanner_source)
+        self.assertIn('client.rpc("get_my_offer_matches"', app)
+        self.assertIn("p_offset: from", app)
+
     def test_user_preferred_airline_increases_offer_score(self):
         flight = {"airline": "SQ", "airline_name": "Singapore Airlines", "price_pln": 5000, "duration_h": 14, "stops": 1}
         base = scanner.score(flight, {"budget_pln": 6000})
@@ -1430,7 +1440,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260805-4', html)
+        self.assertIn('app.js?v=20260805-5', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1503,8 +1513,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("MAX_SCAN_RUNTIME_SECONDS", source)
         self.assertIn("update_scan_progress", source)
         self.assertIn("runtime_limit_reached", source)
-        self.assertIn("timeout-minutes: 60", workflow)
-        self.assertIn('MAX_SCAN_RUNTIME_SECONDS: "3000"', workflow)
+        self.assertIn("timeout-minutes: 25", workflow)
+        self.assertIn('MAX_SCAN_RUNTIME_SECONDS: "1200"', workflow)
         self.assertIn('cron: "17 */6 * * *"', workflow)
         self.assertIn('cron: "47 * * * *"', workflow)
         self.assertIn("github.event.schedule == '47 * * * *' && '400' || '800'", workflow)
@@ -1672,7 +1682,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260805-4', html)
+        self.assertIn('app.js?v=20260805-5', html)
         self.assertIn('styles.css?v=20260805-13', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):

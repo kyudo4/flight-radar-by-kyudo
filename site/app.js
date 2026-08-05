@@ -14,7 +14,7 @@
   const configReady = cfg.supabaseUrl && cfg.supabaseAnonKey && !String(cfg.supabaseUrl).includes("YOUR_") && !String(cfg.supabaseAnonKey).includes("YOUR_");
   let client = null, user = null, profile = null, monitors = [], offers = [], priceHistory = {}, monitorProgress = {};
   let telegramConnectionReady = false;
-  let editingMonitorId = null, airportDataReady = false, offerOffset = 0, offersHaveMore = false, offersLoading = false;
+  let editingMonitorId = null, airportDataReady = false, offerOffset = 0, offersHaveMore = false, offersLoading = false, offerReloadTimer = null;
   const airportSelections = { origins: [], destinations: [] };
   const OFFER_PAGE_SIZE = 40;
   const MAX_MONITOR_COMBINATIONS = 5000;
@@ -200,7 +200,7 @@
     ["monitorFrom", "monitorTo", "monitorReturnFrom", "monitorReturnTo"].forEach(id => $(id).oninput = () => { updateDateConstraints(); updateMonitorEstimate(); });
     $("refreshButton").onclick = async () => { await loadMonitors(); await loadOffers(true); };
     $("loadMoreOffersButton").onclick = () => loadOffers(false);
-    ["offerSearch", "offerCabinFilter", "offerStarsFilter", "offerFreshnessFilter", "offerSort"].forEach(id => $(id).oninput = renderOffers);
+    ["offerSearch", "offerCabinFilter", "offerStarsFilter", "offerFreshnessFilter", "offerSort"].forEach(id => $(id).oninput = scheduleOffersReload);
   }
 
   function renderBlocked() {
@@ -386,7 +386,74 @@
     if (reset) { offerOffset = 0; offers = []; priceHistory = {}; }
     const from = offerOffset;
     const to = from + OFFER_PAGE_SIZE - 1;
+    const displayQuery = String($("offerSearch")?.value || "").trim();
+    const displayCabin = $("offerCabinFilter")?.value || "";
+    const displayStars = Number($("offerStarsFilter")?.value || 0);
+    const displayFreshness = $("offerFreshnessFilter")?.value || "fresh";
+    const displaySort = $("offerSort")?.value || "newest";
     try {
+      // The RPC applies monitor filters before pagination. The compatibility
+      // path below remains available while an older database is deploying the
+      // migration, but production never paginates invalid matches first.
+      const current = await client.rpc("get_my_offer_matches", {
+        p_limit: OFFER_PAGE_SIZE,
+        p_offset: from,
+        p_query: displayQuery,
+        p_cabin: displayCabin,
+        p_min_stars: displayStars,
+        p_freshness: displayFreshness,
+        p_sort: displaySort,
+      });
+      if (!current.error) {
+        const page = (current.data || []).map(row => ({
+          id: row.match_id,
+          monitor_id: row.monitor_id,
+          offer_id: row.offer_id,
+          stars: row.stars,
+          feedback: row.feedback,
+          notified_at: row.notified_at,
+          updated_at: row.updated_at,
+          flight_offers: {
+            id: row.offer_id,
+            fingerprint: row.fingerprint,
+            source: row.source,
+            route: row.route,
+            origin: row.origin,
+            destination: row.destination,
+            travel_date: row.travel_date,
+            return_date: row.return_date,
+            trip_type: row.trip_type,
+            cabin: row.cabin,
+            airline: row.airline,
+            airline_name: row.airline_name,
+            price_pln: row.price_pln,
+            duration_minutes: row.duration_minutes,
+            stops: row.stops,
+            aircraft: row.aircraft,
+            link: row.link,
+            tags: row.tags,
+            raw: row.raw,
+            last_seen_at: row.last_seen_at,
+            verification_status: row.verification_status,
+            verification_note: row.verification_note,
+          },
+        }));
+        const offerIds = [...new Set(page.map(match => match.offer_id).filter(Boolean))];
+        if (offerIds.length) {
+          let { data: historyRows, error: historyError } = await client.rpc("offer_price_history_for_user", { p_offer_ids: offerIds });
+          if (historyError) ({ data: historyRows, error: historyError } = await client.from("offer_price_history").select("offer_id,price_pln,observed_at").in("offer_id", offerIds).order("observed_at", { ascending: false }).limit(600));
+          if (!historyError) for (const row of historyRows || []) (priceHistory[row.offer_id] ||= []).push(row);
+        }
+        offers = reset ? page : [...offers, ...page];
+        offerOffset += page.length;
+        offersHaveMore = page.length === OFFER_PAGE_SIZE;
+        show("loadMoreOffersButton", offersHaveMore);
+        renderOffers();
+        const last = offers[0]?.updated_at;
+        const telegramStatus = telegramConnectionReady ? "✅ Telegram połączony" : "⚠️ Telegram niepołączony — otwórz bota i wyślij /start";
+        $("statusStrip").innerHTML = `<span>🔎 <strong>Ostatni wynik:</strong> ${last ? new Date(last).toLocaleString("pl-PL") : "brak"}</span><span>⏱ Skan Google: 4 razy na dobę</span><span>${telegramStatus}</span>`;
+        return;
+      }
       const { data: matches, error: matchError } = await client.from("user_matches")
         .select("id, monitor_id, offer_id, stars, feedback, notified_at, updated_at")
         .eq("user_id", user.id)
@@ -436,6 +503,10 @@
       offersLoading = false;
       button.disabled = false;
     }
+  }
+  function scheduleOffersReload() {
+    clearTimeout(offerReloadTimer);
+    offerReloadTimer = setTimeout(() => loadOffers(true), 250);
   }
   function renderOffers() {
     const query = String($("offerSearch")?.value || "").trim().toLowerCase();

@@ -30,7 +30,9 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Keep one batch short enough that hourly recovery runs never form a
+    # second-day backlog behind a single long browser fallback pass.
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -55,7 +57,7 @@ jobs:
           MAX_STANDARD_CEILING: ${{ github.event.schedule == '47 * * * *' && '400' || '800' }}
           MAX_FIRST_CEILING: ${{ github.event.schedule == '47 * * * *' && '30' || '150' }}
           GOOGLE_REQUEST_DELAY_SECONDS: "1.5"
-          MAX_SCAN_RUNTIME_SECONDS: "3000"
+          MAX_SCAN_RUNTIME_SECONDS: "1200"
           SCAN_PROGRESS_EVERY: "5"
           # Rendered fallback pages are expensive, but 80 loads were consumed
           # by only a small group of round-trip queries. Keep a bounded 400

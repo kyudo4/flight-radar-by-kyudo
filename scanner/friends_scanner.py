@@ -1003,9 +1003,81 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
 def fetch_existing(monitor_id):
     return fetch_all_rows("user_matches", {
         "monitor_id": "eq." + monitor_id,
-        "select": "id,offer_id,visible,notified_at,notified_generation,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(fingerprint,route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln,first_seen_at)",
+        "select": "id,offer_id,visible,notified_at,notified_generation,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(fingerprint,source,route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln,duration_minutes,stops,aircraft,link,tags,raw,verification_status,verification_note,first_seen_at,last_seen_at)",
         "order": "updated_at.asc,id.asc",
     })
+
+
+def reconcile_existing_monitor_matches(monitor):
+    """Restore shared offers that already satisfy this monitor's filters.
+
+    The database function is idempotent and also creates missing assignments.
+    Returning the changed offer ids lets the current scan enqueue an alert
+    immediately, even when the source query itself is not due yet.
+    """
+    try:
+        result = api("POST", "rpc/reconcile_monitor_offers", body={
+            "p_monitor_id": monitor["id"],
+        })
+    except urllib.error.HTTPError as exc:
+        # Keep older deployments usable until the additive migration is live.
+        if exc.code in {400, 404}:
+            return set()
+        raise
+    if not isinstance(result, dict):
+        return set()
+    ids = set()
+    for key in ("new_offer_ids", "reactivated_offer_ids"):
+        values = result.get(key) or []
+        ids.update(str(value) for value in values if value)
+    return ids
+
+
+def enqueue_reconciled_alerts(monitor, offer_ids, preferences=None):
+    """Create durable Telegram alerts for offers restored by reconciliation."""
+    if not offer_ids:
+        return 0
+    previous = fetch_existing(monitor["id"])
+    filters = monitor.get("filters") or {}
+    connection_rows = api("GET", "telegram_connections", params={
+        "user_id": "eq." + monitor["user_id"],
+        "select": "chat_id",
+    })
+    connection = connection_rows[0] if connection_rows else None
+    if not connection:
+        return 0
+    sent = 0
+    for row in previous:
+        if str(row.get("offer_id")) not in offer_ids or not row.get("visible", True):
+            continue
+        offer = row.get("flight_offers") or {}
+        raw = offer.get("raw") if isinstance(offer.get("raw"), dict) else {}
+        flight = {**raw}
+        for field in ("airline", "airline_name", "price_pln", "duration_minutes", "stops", "aircraft", "source"):
+            if offer.get(field) is not None:
+                flight[field] = offer[field]
+        flight["duration_h"] = flight.get("duration_h") or (
+            float(offer["duration_minutes"]) / 60 if offer.get("duration_minutes") is not None else None
+        )
+        if not budget_ok(flight, filters) or not quality(flight, filters):
+            continue
+        route = offer.get("route") or "%s → %s" % (offer.get("origin", ""), offer.get("destination", ""))
+        cabin = str(offer.get("cabin") or "").upper().replace("-", "_")
+        match = dict(row)
+        match["stars"] = score(
+            flight, filters, preferences or [], route=route,
+            destination=offer.get("destination", ""), cabin=cabin,
+            market_prices=[],
+        )
+        match["telegram_eligible"] = True
+        match["_new_filter_scope"] = True
+        match["_same_offer"] = True
+        match["_monitor_generation"] = int(monitor.get("queue_generation") or 0)
+        match["_pending_unnotified"] = not bool(row.get("notified_at"))
+        api("PATCH", "user_matches", body={"stars": match["stars"]}, params={"id": "eq." + row["id"]})
+        if send_due_alert(match, offer, monitor, connection):
+            sent += 1
+    return sent
 
 
 def fetch_preferences(user_id):
@@ -1385,6 +1457,7 @@ def main():
     for monitor in active:
         try:
             sync_monitor_scan_items(monitor)
+            monitor["_reconciled_offer_ids"] = reconcile_existing_monitor_matches(monitor)
             refresh_monitor_status(monitor["id"])
         except Exception as exc:
             error = "Kolejka monitora %s: %s" % (monitor["id"], str(exc)[:160])
@@ -1441,6 +1514,20 @@ def main():
         # i wysyłać oferty z pominięciem wyuczonych decyzji użytkownika.
         for user_id in sorted({monitor["user_id"] for monitor in active}):
             preference_cache[user_id] = fetch_preferences(user_id)
+        # Restore shared offers before consuming the Google queue. This makes
+        # a stored current fare visible and alertable immediately after a
+        # monitor edit, instead of waiting for its old queue item to become due.
+        for monitor in active:
+            reconciled_ids = monitor.get("_reconciled_offer_ids") or set()
+            if not reconciled_ids:
+                continue
+            try:
+                sent_count += enqueue_reconciled_alerts(
+                    monitor, reconciled_ids, preference_cache[monitor["user_id"]]
+                )
+            except Exception as exc:
+                task_errors.append("Uzgadnianie ofert/%s: %s" % (monitor["id"], str(exc)[:160]))
+                log("Nie udało się uzgodnić istniejących ofert: %s" % task_errors[-1])
         for task in tasks:
             if time.monotonic() - scan_started_monotonic >= MAX_SCAN_RUNTIME_SECONDS:
                 task_errors.append(
