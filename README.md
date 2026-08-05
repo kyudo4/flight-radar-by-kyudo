@@ -162,6 +162,11 @@ pozycje, a „Przeskanuj pełną kolejkę” przechodzi bieżącą kolejkę w ra
 Po pierwszym 403/429/503, CAPTCHA albo consent wall bieżący przebieg
 kończy się natychmiast, a kolejny schodzi co najmniej o połowę (nie ma bezmyślnego
 ponawiania zablokowanego żądania). Historia limitów i blokad jest zapisana w `scan_runs`.
+
+Po zmianie filtrów monitor zapisuje moment rozpoczęcia nowego zakresu. Oferty znalezione
+po tej zmianie nie są odrzucane tylko dlatego, że na tej samej trasie i linii istniała
+wcześniej oferta w innym dniu za tę samą cenę. Deduplikacja między różnymi dniami nadal
+działa w obrębie bieżącego zakresu filtrów.
 Opóźnienie między zapytaniami pozostaje włączone. Wartości można zmienić przez
 `MAX_STANDARD_QUERIES`, `MAX_FIRST_QUERIES`, `MAX_STANDARD_CEILING`,
 `MAX_FIRST_CEILING`, `QUERY_RAMP_STANDARD_STEP`, `QUERY_RAMP_FIRST_STEP` oraz

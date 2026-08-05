@@ -671,6 +671,22 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertTrue(scanner.historical_duplicate(previous, "POZ → BKK", "BUSINESS", "QR", "2026-09-02", 5300, "2026-09-11", "round_trip"))
         self.assertFalse(scanner.historical_duplicate(previous, "POZ → BKK", "BUSINESS", "QR", "2026-09-02", 4900, "2026-09-11", "round_trip"))
 
+    def test_filter_change_baseline_does_not_hide_new_same_price_date(self):
+        previous = [{"min_price_for_user": 1300, "flight_offers": {
+            "route": "WAW → BKK", "travel_date": "2026-10-26",
+            "cabin": "ECONOMY", "airline": "G9", "price_pln": 1300,
+            "first_seen_at": "2026-08-04T12:00:00Z",
+        }}]
+        self.assertFalse(scanner.historical_duplicate(
+            previous, "WAW → BKK", "ECONOMY", "G9", "2026-10-27", 1300,
+            baseline_after="2026-08-05T00:00:00Z",
+        ))
+        previous[0]["flight_offers"]["first_seen_at"] = "2026-08-05T01:00:00Z"
+        self.assertTrue(scanner.historical_duplicate(
+            previous, "WAW → BKK", "ECONOMY", "G9", "2026-10-27", 1300,
+            baseline_after="2026-08-05T00:00:00Z",
+        ))
+
     def test_exact_ten_percent_drop_is_eligible(self):
         self.assertTrue(scanner.price_drop_eligible(5000, 4500, 10))
         self.assertFalse(scanner.price_drop_eligible(5000, 4501, 10))
@@ -1585,6 +1601,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
             "where monitor_id = new.id\n      and visible;",
             migration,
         )
+
+    def test_filter_change_baseline_is_persisted_and_updated_by_trigger(self):
+        migration = (ROOT / "supabase" / "migrations" / "20260805000200_filter_change_baseline.sql").read_text()
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        for source in (migration, schema):
+            self.assertIn("filters_changed_at", source)
+            self.assertIn("mark_monitor_filters_changed", source)
+        self.assertIn("baseline_after=monitor.get(\"filters_changed_at\")", (ROOT / "scanner" / "friends_scanner.py").read_text())
 
     def test_round_trip_server_results_cannot_be_marked_purchase_verified(self):
         source = (ROOT / "scanner" / "gflights.py").read_text()

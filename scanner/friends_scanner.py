@@ -962,7 +962,7 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
 def fetch_existing(monitor_id):
     return fetch_all_rows("user_matches", {
         "monitor_id": "eq." + monitor_id,
-        "select": "id,offer_id,visible,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(fingerprint,route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln)",
+        "select": "id,offer_id,visible,notified_at,last_notified_price,min_price_for_user,telegram_eligible,new_airline,feedback,flight_offers(fingerprint,route,origin,destination,travel_date,return_date,trip_type,cabin,airline,airline_name,price_pln,first_seen_at)",
         "order": "updated_at.asc,id.asc",
     })
 
@@ -1091,12 +1091,29 @@ def airline_identity(flight):
     return " ".join(str(flight.get("airline_name") or "").lower().split())
 
 
-def historical_duplicate(previous, route, cabin, airline, travel_date, price, return_date=None, trip_type_value="one_way"):
+def historical_duplicate(previous, route, cabin, airline, travel_date, price,
+                         return_date=None, trip_type_value="one_way",
+                         baseline_after=None):
     if price is None or not airline:
         return False
     prices = []
     for old in previous:
         offer = old.get("flight_offers") or {}
+        if baseline_after:
+            # After a monitor edit, offers seen before the new filter scope
+            # must not suppress newly discovered dates at the same price.
+            # Missing/invalid legacy timestamps are treated as old and are
+            # therefore excluded from this post-edit baseline.
+            seen_at = offer.get("first_seen_at")
+            if not seen_at:
+                continue
+            try:
+                seen = datetime.fromisoformat(str(seen_at).replace("Z", "+00:00"))
+                changed = datetime.fromisoformat(str(baseline_after).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if seen < changed:
+                continue
         old_cabin = str(offer.get("cabin") or "").upper().replace("-", "_")
         old_trip = offer.get("trip_type") or ("round_trip" if offer.get("return_date") else "one_way")
         exact_same_query = offer.get("travel_date") == travel_date and offer.get("return_date") == return_date
@@ -1207,7 +1224,12 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
             for value in (old_offer.get("price_pln"), old.get("min_price_for_user")):
                 if value is not None:
                     previous_prices.append(int(value))
-    if historical_duplicate(active_previous, route, cabin, airline, task["date"], flight.get("price_pln"), return_date=return_date, trip_type_value=trip_type_value):
+    if historical_duplicate(
+        active_previous, route, cabin, airline, task["date"],
+        flight.get("price_pln"), return_date=return_date,
+        trip_type_value=trip_type_value,
+        baseline_after=monitor.get("filters_changed_at"),
+    ):
         # Nowy dzień tej samej trasy i linii nie jest nową okazją, jeśli kosztuje tyle samo lub więcej.
         return 0, 0
     offer = save_offer(task, flight)

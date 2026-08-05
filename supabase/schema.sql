@@ -47,6 +47,7 @@ create table public.monitors (
   app_rules jsonb not null default '{}'::jsonb,
   telegram_rules jsonb not null default '{}'::jsonb,
   expires_at date,
+  filters_changed_at timestamptz not null default now(),
   last_scanned_at timestamptz,
   next_scan_at timestamptz,
   created_at timestamptz not null default now(),
@@ -411,6 +412,16 @@ begin
 end;
 $$;
 
+create or replace function public.mark_monitor_filters_changed()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.filters is distinct from old.filters then
+    new.filters_changed_at = now();
+  end if;
+  return new;
+end;
+$$;
+
 create or replace function public.offer_matches_monitor_filters(
   p_offer_id uuid,
   p_filters jsonb
@@ -504,6 +515,11 @@ drop trigger if exists touch_monitors_updated_at on public.monitors;
 create trigger touch_monitors_updated_at
   before update on public.monitors
   for each row execute procedure public.touch_updated_at();
+
+drop trigger if exists mark_monitor_filters_changed on public.monitors;
+create trigger mark_monitor_filters_changed
+  before update of filters on public.monitors
+  for each row execute procedure public.mark_monitor_filters_changed();
 
 drop trigger if exists touch_matches_updated_at on public.user_matches;
 create trigger touch_matches_updated_at
