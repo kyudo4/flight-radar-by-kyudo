@@ -1529,6 +1529,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("800 + 150", readme)
         self.assertIn("cogodzinny retry", readme)
 
+    def test_scheduled_scans_use_database_lease_instead_of_actions_pending_queue(self):
+        workflow = (ROOT / ".github" / "workflows" / "scan.yml").read_text()
+        source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260806000100_durable_scan_slot_lease.sql").read_text()
+        self.assertNotIn("group: friends-backend", workflow)
+        self.assertIn('api("POST", "rpc/reserve_scan_slot", body={})', source)
+        self.assertIn("Pominięto przebieg: inny skan już trwa", source)
+        self.assertIn("status in ('queued', 'running')", migration)
+        self.assertIn("interval '30 minutes'", migration)
+
     def test_telegram_feedback_has_fast_separate_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "telegram-feedback.yml").read_text()
         readme = (ROOT / "README.md").read_text()

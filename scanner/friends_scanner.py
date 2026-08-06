@@ -1434,6 +1434,19 @@ def main():
         # Ta gałąź chroni stare ręczne uruchomienia przed rozpoczęciem skanu.
         log("Odbiór Telegrama jest obsługiwany przez telegram_feedback.py")
         return
+    global RESERVED_RUN_ID
+    if not RESERVED_RUN_ID:
+        # Scheduled runs must reserve the same database slot as manual runs.
+        # GitHub can start two cron jobs close together; the database is the
+        # durable source of truth and lets the losing job exit successfully.
+        try:
+            reserved = api("POST", "rpc/reserve_scan_slot", body={})
+        except Exception as exc:
+            raise SystemExit("Nie udało się zarezerwować slotu skanu: %s" % str(exc)[:180])
+        if not reserved:
+            log("Pominięto przebieg: inny skan już trwa lub został uruchomiony przed chwilą")
+            return
+        RESERVED_RUN_ID = str(reserved)
     now = datetime.utcnow()
     active_profiles = api("GET", "profiles", params={"status": "eq.active", "select": "id", "limit": "20"})
     active_ids = [row["id"] for row in active_profiles]

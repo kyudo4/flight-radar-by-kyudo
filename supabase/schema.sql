@@ -773,6 +773,14 @@ declare
   reserved_id uuid;
 begin
   perform pg_advisory_xact_lock(47011);
+  if exists (
+    select 1
+    from public.scan_runs
+    where status in ('queued', 'running')
+      and started_at >= now() - interval '30 minutes'
+  ) then
+    return null;
+  end if;
   if exists (select 1 from public.scan_runs where started_at >= now() - interval '10 minutes') then
     return null;
   end if;
