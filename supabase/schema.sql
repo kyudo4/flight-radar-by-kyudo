@@ -1208,7 +1208,8 @@ revoke execute on function public.prevent_self_privilege_change() from public, a
 revoke execute on function public.enforce_monitor_limit() from public, anon, authenticated;
 revoke execute on function public.touch_updated_at() from public, anon, authenticated;
 revoke execute on function public.validate_monitor_filters() from public, anon, authenticated;
-revoke execute on function public.valid_round_trip_pair_count(date, date, date, date) from public, anon, authenticated;
+revoke execute on function public.valid_round_trip_pair_count(date, date, date, date) from public, anon;
+grant execute on function public.valid_round_trip_pair_count(date, date, date, date) to authenticated;
 
 revoke execute on function public.is_admin() from public;
 revoke execute on function public.is_active_user(uuid) from public;

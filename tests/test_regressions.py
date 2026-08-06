@@ -572,6 +572,12 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(scanner.valid_round_trip_pair_count(filters), 3)
         self.assertEqual(scanner.monitor_combination_count(filters), 3)
 
+    def test_round_trip_validator_can_run_from_authenticated_monitor_trigger(self):
+        schema = (ROOT / "supabase" / "schema.sql").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260806000200_allow_round_trip_validator_trigger.sql").read_text()
+        self.assertIn("grant execute on function public.valid_round_trip_pair_count(date, date, date, date) to authenticated", schema)
+        self.assertIn("grant execute on function public.valid_round_trip_pair_count(date, date, date, date) to authenticated", migration)
+
     def test_round_trip_queue_has_a_safe_combination_cap(self):
         monitor = {"id": "large-round-trip", "filters": {
             "origins": ["GDN", "WAW", "POZ", "VIE", "MXP"],
