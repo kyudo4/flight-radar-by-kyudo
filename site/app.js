@@ -521,7 +521,11 @@
       const budget = Number(monitor?.filters?.budget_pln);
       if (!monitor || !Number.isFinite(budget) || budget <= 0 || Number(offer.price_pln) > budget) return false;
       const stale = isOfferStale(offer);
-      if (freshness === "fresh" && stale) return false;
+      const verified = isOfferVerified(offer);
+      // "Aktualna" means that the complete itinerary was verified, not merely
+      // that Google returned a card. Pending/partial reads must never look
+      // like confirmed prices in the default view.
+      if (freshness === "fresh" && !verified) return false;
       if (freshness === "stale" && !stale) return false;
       const haystack = `${offer.route || ""} ${routeName(offer.route)} ${offer.airline_name || ""} ${offer.source || ""}`.toLowerCase();
       const normalizedCabin = String(offer.cabin || "").replace("-", "_");
@@ -541,6 +545,7 @@
   // offer stale only after a complete healthy source pass, so the UI must use
   // that authoritative status instead of hiding offers after 24 hours.
   function isOfferStale(offer) { return offer.verification_status === "stale"; }
+  function isOfferVerified(offer) { return offer.verification_status === "verified"; }
   function renderPriceHistory(offer) {
     const rows = (priceHistory[offer.id] || []).filter(row => Number(row.price_pln) > 0).slice(0, 12).reverse();
     if (!rows.length) return "";

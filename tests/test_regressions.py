@@ -1440,7 +1440,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260805-6', html)
+        self.assertIn('app.js?v=20260806-1', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1682,7 +1682,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260805-6', html)
+        self.assertIn('app.js?v=20260806-1', html)
         self.assertIn('styles.css?v=20260805-13', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
@@ -1812,6 +1812,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("pending_verification", schema)
         self.assertIn("pending_verification", migration)
         self.assertIn('o.verification_status === "pending_verification"', app)
+
+    def test_default_offer_view_requires_full_verification(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260806000100_strict_current_offer_filter.sql").read_text()
+        self.assertIn('function isOfferVerified(offer) { return offer.verification_status === "verified"; }', app)
+        self.assertIn('freshness === "fresh" && !verified', app)
+        self.assertIn("p_freshness = 'fresh' and offer.verification_status = 'verified'", migration)
 
     def test_telegram_auth_requires_invite_only_for_new_profiles(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
