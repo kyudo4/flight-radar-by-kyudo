@@ -1748,7 +1748,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
         self.assertIn('app.js?v=20260806-2', html)
-        self.assertIn('styles.css?v=20260806-1', html)
+        self.assertIn('styles.css?v=20260806-2', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1949,6 +1949,12 @@ class FlightRadarRegressionTests(unittest.TestCase):
         styles = (ROOT / "site" / "styles.css").read_text()
         self.assertIn(".user-row .secondary,.user-row .danger", styles)
         self.assertIn("font-size:12px", styles)
+
+    def test_dark_theme_keeps_monitor_date_picker_visible(self):
+        styles = (ROOT / "site" / "styles.css").read_text()
+        self.assertIn('body.dark input[type="date"]{color-scheme:dark}', styles)
+        self.assertIn('body.dark input[type="date"]::-webkit-calendar-picker-indicator', styles)
+        self.assertIn("filter:invert(1)", styles)
 
     def test_quality_features_are_wired_across_scanner_database_and_panel(self):
         app = (ROOT / "site" / "app.js").read_text()
