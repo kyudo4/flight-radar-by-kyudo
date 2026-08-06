@@ -169,10 +169,18 @@ def run_direct_sql(query=None, path=None):
 
 def migration_files():
     files = []
+    versions = {}
     for path in sorted(MIGRATION_DIR.glob("*.sql")):
         match = VERSION_RE.match(path.name)
         if match and match.group(1) >= MIN_VERSION:
-            files.append((match.group(1), match.group(2), path))
+            version = match.group(1)
+            if version in versions:
+                raise RuntimeError(
+                    "Duplicate migration version %s: %s and %s"
+                    % (version, versions[version].name, path.name)
+                )
+            versions[version] = path
+            files.append((version, match.group(2), path))
     return files
 
 

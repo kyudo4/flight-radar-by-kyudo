@@ -1446,7 +1446,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260806-1', html)
+        self.assertIn('app.js?v=20260806-2', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1532,12 +1532,61 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_scheduled_scans_use_database_lease_instead_of_actions_pending_queue(self):
         workflow = (ROOT / ".github" / "workflows" / "scan.yml").read_text()
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
-        migration = (ROOT / "supabase" / "migrations" / "20260806000100_durable_scan_slot_lease.sql").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260806000300_durable_scan_slot_lease.sql").read_text()
         self.assertNotIn("group: friends-backend", workflow)
         self.assertIn('api("POST", "rpc/reserve_scan_slot", body={})', source)
         self.assertIn("Pominięto przebieg: inny skan już trwa", source)
         self.assertIn("status in ('queued', 'running')", migration)
         self.assertIn("interval '30 minutes'", migration)
+
+    def test_scheduled_scan_exits_successfully_when_database_slot_is_busy(self):
+        with patch.object(scanner, "SUPABASE_URL", "https://example.supabase.co"), \
+             patch.object(scanner, "SERVICE_KEY", "service-key"), \
+             patch.object(scanner, "TG_TOKEN", "telegram-token"), \
+             patch.object(scanner, "PROCESS_TELEGRAM_ONLY", False), \
+             patch.object(scanner, "RESERVED_RUN_ID", ""), \
+             patch.object(scanner, "api", return_value=None) as api_call, \
+             patch.object(scanner, "run_reserved_scan") as run_scan:
+            scanner.main()
+        api_call.assert_called_once_with("POST", "rpc/reserve_scan_slot", body={})
+        run_scan.assert_not_called()
+
+    def test_startup_failure_closes_a_still_active_scan_reservation(self):
+        calls = []
+
+        def fake_api(method, path, body=None, params=None):
+            calls.append((method, path, body, params))
+            if path == "rpc/reserve_scan_slot":
+                return "scan-slot-1"
+            return []
+
+        with patch.object(scanner, "SUPABASE_URL", "https://example.supabase.co"), \
+             patch.object(scanner, "SERVICE_KEY", "service-key"), \
+             patch.object(scanner, "TG_TOKEN", "telegram-token"), \
+             patch.object(scanner, "PROCESS_TELEGRAM_ONLY", False), \
+             patch.object(scanner, "RESERVED_RUN_ID", ""), \
+             patch.object(scanner, "api", side_effect=fake_api), \
+             patch.object(scanner, "run_reserved_scan", side_effect=RuntimeError("startup failed")):
+            with self.assertRaisesRegex(RuntimeError, "startup failed"):
+                scanner.main()
+
+        closing = [call for call in calls if call[0] == "PATCH" and call[1] == "scan_runs"]
+        self.assertEqual(len(closing), 1)
+        self.assertEqual(closing[0][3]["id"], "eq.scan-slot-1")
+        self.assertEqual(closing[0][3]["status"], "in.(queued,running)")
+        self.assertEqual(closing[0][2]["status"], "error")
+
+    def test_production_migration_versions_are_unique(self):
+        import re
+        versions = {}
+        for path in (ROOT / "supabase" / "migrations").glob("*.sql"):
+            match = re.match(r"^(\d{14})_", path.name)
+            if not match:
+                continue
+            self.assertNotIn(match.group(1), versions, f"Powtórzona wersja migracji: {path.name} i {versions.get(match.group(1))}")
+            versions[match.group(1)] = path.name
+        migrator = (ROOT / "scripts" / "apply_supabase_migrations.py").read_text()
+        self.assertIn("Duplicate migration version", migrator)
 
     def test_telegram_feedback_has_fast_separate_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "telegram-feedback.yml").read_text()
@@ -1698,8 +1747,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260806-1', html)
-        self.assertIn('styles.css?v=20260805-13', html)
+        self.assertIn('app.js?v=20260806-2', html)
+        self.assertIn('styles.css?v=20260806-1', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -2019,6 +2068,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("due_item_count", app)
         self.assertIn("total_queue_count", schema)
         self.assertIn("scan_queue_summary", migration)
+
+    def test_admin_warns_when_scheduled_scans_are_overdue(self):
+        app = (ROOT / "site" / "app.js").read_text()
+        styles = (ROOT / "site" / "styles.css").read_text()
+        self.assertIn("8 * 60 * 60 * 1000", app)
+        self.assertIn("Automatyczne skany nie wykonały się od ponad 8 godzin", app)
+        self.assertIn("scan-health-warning", styles)
 
     def test_source_structure_errors_are_not_reported_as_google_blocks(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()

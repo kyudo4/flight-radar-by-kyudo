@@ -1426,27 +1426,7 @@ def process_candidate(monitor, task, flight, previous=None, preferences=None, ma
     return 1, sent
 
 
-def main():
-    if not SUPABASE_URL or not SERVICE_KEY or not TG_TOKEN:
-        raise SystemExit("Brak SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY albo TG_BOT_TOKEN")
-    if PROCESS_TELEGRAM_ONLY:
-        # Odpowiedzi Telegrama obsługuje wyłącznie dedykowany workflow.
-        # Ta gałąź chroni stare ręczne uruchomienia przed rozpoczęciem skanu.
-        log("Odbiór Telegrama jest obsługiwany przez telegram_feedback.py")
-        return
-    global RESERVED_RUN_ID
-    if not RESERVED_RUN_ID:
-        # Scheduled runs must reserve the same database slot as manual runs.
-        # GitHub can start two cron jobs close together; the database is the
-        # durable source of truth and lets the losing job exit successfully.
-        try:
-            reserved = api("POST", "rpc/reserve_scan_slot", body={})
-        except Exception as exc:
-            raise SystemExit("Nie udało się zarezerwować slotu skanu: %s" % str(exc)[:180])
-        if not reserved:
-            log("Pominięto przebieg: inny skan już trwa lub został uruchomiony przed chwilą")
-            return
-        RESERVED_RUN_ID = str(reserved)
+def run_reserved_scan():
     now = datetime.utcnow()
     active_profiles = api("GET", "profiles", params={"status": "eq.active", "select": "id", "limit": "20"})
     active_ids = [row["id"] for row in active_profiles]
@@ -1713,6 +1693,47 @@ def main():
         raise
     except Exception as exc:
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": "error", "error": str(exc)[:500]}, params={"id": "eq." + run["id"]})
+        raise
+
+
+def main():
+    global RESERVED_RUN_ID
+    if not SUPABASE_URL or not SERVICE_KEY or not TG_TOKEN:
+        raise SystemExit("Brak SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY albo TG_BOT_TOKEN")
+    if PROCESS_TELEGRAM_ONLY:
+        # Odpowiedzi Telegrama obsługuje wyłącznie dedykowany workflow.
+        # Ta gałąź chroni stare ręczne uruchomienia przed rozpoczęciem skanu.
+        log("Odbiór Telegrama jest obsługiwany przez telegram_feedback.py")
+        return
+    if not RESERVED_RUN_ID:
+        # Scheduled runs must reserve the same database slot as manual runs.
+        # GitHub can start two cron jobs close together; the database is the
+        # durable source of truth and lets the losing job exit successfully.
+        try:
+            reserved = api("POST", "rpc/reserve_scan_slot", body={})
+        except Exception as exc:
+            raise SystemExit("Nie udało się zarezerwować slotu skanu: %s" % str(exc)[:180])
+        if not reserved:
+            log("Pominięto przebieg: inny skan już trwa lub został uruchomiony przed chwilą")
+            return
+        RESERVED_RUN_ID = str(reserved)
+    try:
+        run_reserved_scan()
+    except BaseException as exc:
+        # If startup failed before the normal scan finalizer was installed,
+        # close only a still-active reservation. Completed blocked/error runs
+        # are left untouched by this conditional update.
+        try:
+            api("PATCH", "scan_runs", body={
+                "finished_at": datetime.utcnow().isoformat() + "Z",
+                "status": "error",
+                "error": str(exc)[:500],
+            }, params={
+                "id": "eq." + RESERVED_RUN_ID,
+                "status": "in.(queued,running)",
+            })
+        except Exception as close_error:
+            log("Nie udało się zamknąć rezerwacji skanu: %s" % str(close_error)[:160])
         raise
 
 

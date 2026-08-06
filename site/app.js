@@ -642,7 +642,10 @@
     const rows = data || [], latest = rows[0];
     const coverage = row => row.coverage_percent == null ? "" : ` · pokrycie: ${Number(row.coverage_percent).toLocaleString("pl-PL", { maximumFractionDigits: 2 })}%`;
     const queue = row => row.due_count == null ? "" : ` · zapytania: ${row.selected_count || 0}/${row.due_count || 0} · pozycje kolejki: ${row.due_item_count == null ? "—" : `${row.due_item_count}/${row.total_queue_count || 0}`}`;
-    $("scanStatus").innerHTML = latest ? `<strong>Ostatni skan: ${esc(scanStatusLabel(latest.status))}</strong> · ${esc(dateTimeFmt(latest.started_at))} · zapytań: ${latest.query_count || 0} · ofert: ${latest.offer_count || 0}${queue(latest)}${coverage(latest)}${scanErrorDetails(latest.error)}` : "Brak uruchomionych skanów.";
+    const lastScanTime = latest ? new Date(latest.finished_at || latest.started_at || 0).getTime() : 0;
+    const scanOverdue = lastScanTime > 0 && Date.now() - lastScanTime > 8 * 60 * 60 * 1000;
+    const healthWarning = scanOverdue ? `<div class="scan-health-warning">⚠️ Automatyczne skany nie wykonały się od ponad 8 godzin. Sprawdź GitHub Actions lub uruchom skan ręcznie.</div>` : "";
+    $("scanStatus").innerHTML = latest ? `<strong>Ostatni skan: ${esc(scanStatusLabel(latest.status))}</strong> · ${esc(dateTimeFmt(latest.started_at))} · zapytań: ${latest.query_count || 0} · ofert: ${latest.offer_count || 0}${queue(latest)}${coverage(latest)}${scanErrorDetails(latest.error)}${healthWarning}` : "Brak uruchomionych skanów.";
     $("scanHistory").innerHTML = rows.length ? `<h3>Historia skanów</h3>${rows.map(row => `<div class="scan-row"><span class="status-${scanStatusClass(row.status)}">${esc(scanStatusLabel(row.status))}</span><span>${esc(dateTimeFmt(row.started_at))}</span><span>${row.query_count || 0} zapytań · ${row.offer_count || 0} ofert${queue(row)}${coverage(row)}</span>${scanErrorDetails(row.error)}</div>`).join("")}` : "";
     return latest;
   }
