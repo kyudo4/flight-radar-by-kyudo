@@ -7,6 +7,10 @@ on:
       - "supabase/migrations/**"
       - "scripts/apply_supabase_migrations.py"
       - ".github/workflows/supabase-migrations.yml"
+  # Reconcile idempotently after GitHub incidents that lose a push-triggered
+  # run before any job starts.
+  schedule:
+    - cron: "7 */6 * * *"
   workflow_dispatch:
 
 permissions:

@@ -1910,6 +1910,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_migrations_have_an_automatic_deployment_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
         self.assertIn('"supabase/migrations/**"', workflow)
+        self.assertIn('cron: "7 */6 * * *"', workflow)
         self.assertIn("SUPABASE_ACCESS_TOKEN", workflow)
         self.assertIn("SUPABASE_DB_PASSWORD", workflow)
         self.assertIn("scripts/apply_supabase_migrations.py", workflow)
