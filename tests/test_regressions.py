@@ -831,7 +831,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         connecting = {**direct, "stops": 1}
         self.assertNotEqual(scanner.offer_fingerprint(task, direct), scanner.offer_fingerprint(task, connecting))
 
-    def test_priority_and_preferred_airline_share_one_star_bonus(self):
+    def test_preferred_airline_gets_one_star_bonus_only_when_selected(self):
         flight = {
             "airline": "QR", "airline_name": "Qatar Airways",
             "price_pln": 6000, "duration_h": 14, "stops": 1,
@@ -840,7 +840,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             flight, {"budget_pln": 6000, "preferred_airlines": ["Qatar Airways"]}
         ), 4)
 
-    def test_priority_airline_is_not_required_for_high_market_rating(self):
+    def test_unselected_airline_gets_no_hidden_global_bonus(self):
         flight = {"airline": "AY", "airline_name": "Finnair", "price_pln": 3500, "duration_h": 14, "stops": 1}
         self.assertEqual(scanner.score(
             flight, {"budget_pln": 6000}, market_prices=[3500, 7000, 7600]
@@ -852,7 +852,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             flight, {"budget_pln": 5000}, market_prices=[3500, 4000, 5000]
         ), 1)
 
-    def test_priority_bonus_does_not_rescue_a_bad_market_fare(self):
+    def test_selected_airline_bonus_does_not_rescue_a_bad_market_fare(self):
         flight = {"airline": "EY", "airline_name": "Etihad", "price_pln": 5000, "duration_h": 14, "stops": 1}
         self.assertEqual(scanner.score(
             flight, {"budget_pln": 6000}, market_prices=[4000, 4500, 5000]

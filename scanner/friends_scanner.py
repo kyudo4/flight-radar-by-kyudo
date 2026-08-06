@@ -50,7 +50,6 @@ PREFERENCE_FETCH_RETRIES = 3
 STALE_AFTER_HOURS = 24
 PRICE_HISTORY_LAST = {}
 STALE_SCHEMA_SUPPORTED = None
-PRIORITY = {"QR", "EY", "EK", "WY", "TK", "BR", "SQ", "CX", "NH", "JL"}
 ASIA_DESTINATION_CODES = frozenset({
     "BKK", "SIN", "KUL", "HKG", "HAN", "SGN", "HND", "NRT", "KIX", "ICN",
 })
@@ -957,15 +956,12 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
         # When a real route benchmark exists, it is the primary rating. A fare
         # that fits the user's budget can still be a poor deal for this route.
         stars = market_price_stars(price, market_prices)
-        ratio = float(price) / reference
-        priority_airline = flight.get("airline") in PRIORITY and ratio <= 0.90
     else:
         # A sparse route still needs a useful first-pass rating.  A fare at
         # least 10% below the user's hard ceiling is interesting even when
         # Google returned fewer than three comparable cards; otherwise a good
         # offer could be hidden by a 4/5-star Telegram threshold.
         stars = 5 if price <= budget * .55 else 4 if price <= budget * .90 else 3 if price <= budget else 2 if price <= budget * 1.15 else 1
-        priority_airline = flight.get("airline") in PRIORITY
     # This is a deliberately narrow override for an objectively exceptional
     # Asia Economy fare. It must also apply when the route already has enough
     # history for a market benchmark; otherwise the same fare can fall back to
@@ -976,9 +972,9 @@ def score(flight, filters, feedback=None, preferences=None, route="", destinatio
     airline_code = str(flight.get("airline") or "").strip().upper()
     airline_name = str(flight.get("airline_name") or "").strip().upper()
     preferred_match = preferred and any(value == airline_code or value in airline_name for value in preferred)
-    if priority_airline or preferred_match:
-        # Priority and preferred status are one airline-quality signal, not
-        # two independent bonuses.
+    if preferred_match:
+        # Airline preference is explicitly configured per monitor. There is
+        # no hidden global carrier bonus.
         stars = min(5, stars + 1)
     scored_durations = [
         flight.get("duration_h"),
@@ -1562,7 +1558,7 @@ def main():
             else:
                 successful_google_tasks += 1
                 related = [m for m in active if m["id"] in task["monitor_ids"]]
-                preferred_codes = set(PRIORITY)
+                preferred_codes = set()
                 for monitor in related:
                     for airline in (monitor.get("filters") or {}).get("preferred_airlines", []):
                         code = gflights.airline_code(str(airline))
@@ -1570,8 +1566,8 @@ def main():
                             preferred_codes.add(code)
                 # Select one representative per airline, but do not cap the
                 # number of airlines before applying each user's filters. A
-                # cheap non-priority fare must not disappear because three
-                # more expensive priority carriers were returned first.
+                # carrier selected in a monitor is processed first, but no
+                # hidden global priority list can reorder or suppress fares.
                 for flight in gflights.cheapest_picks(flights, preferred_codes):
                     for monitor in related:
                         try:

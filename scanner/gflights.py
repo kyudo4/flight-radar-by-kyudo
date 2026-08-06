@@ -22,7 +22,7 @@ import google_browser
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 
-# Aliasy nazw linii z Google Flights -> kod IATA (uzupełnia priority_airlines)
+# Aliasy nazw linii z Google Flights -> kod IATA (dla linii wybranych w monitorze)
 AIRLINE_ALIASES = {
     "qatar airways": "QR", "qatar": "QR", "etihad": "EY", "emirates": "EK",
     "oman air": "WY", "turkish airlines": "TK", "turkish": "TK",
@@ -220,14 +220,14 @@ def _best_value(flights):
                                     f["price_pln"]))
 
 
-def cheapest_picks(flights, priority_codes, max_options=None):
+def cheapest_picks(flights, preferred_codes, max_options=None):
     """Najlepsze warianty różnych przewoźników.
 
     Google Flights potrafi pokazać tańszą linię po poprzednim skanie. Dlatego
     dla każdej linii wybieramy najrozsądniejszy wariant. Domyślnie zwracamy
     najlepszy wariant każdej znalezionej linii; filtrowanie budżetu, czasu i
-    przesiadek odbywa się dopiero po tej funkcji. Dzięki temu trzy droższe
-    linie priorytetowe nie mogą ukryć czwartej, tańszej linii.
+    przesiadek odbywa się dopiero po tej funkcji. Dzięki temu linia wybrana
+    przez użytkownika nie zginie za innymi ofertami.
     """
     if not flights:
         return []
@@ -238,19 +238,19 @@ def cheapest_picks(flights, priority_codes, max_options=None):
     candidates = [_best_value(group) for group in by_airline.values()]
     candidates.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
                                    f["stops"] if f["stops"] is not None else 9))
-    priorities = [f for f in candidates if f["airline"] in priority_codes]
-    non_priorities = [f for f in candidates if f["airline"] not in priority_codes]
+    preferred = [f for f in candidates if f["airline"] in preferred_codes]
+    other = [f for f in candidates if f["airline"] not in preferred_codes]
     # The source query already returns all visible Google cards. This ordering
-    # makes the scanner process the requested priority carriers first, so a
+    # makes the scanner process the requested carriers first, so a
     # later CAPTCHA or runtime limit cannot systematically skip them.
-    priorities.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
-                                   f["stops"] if f["stops"] is not None else 9))
-    non_priorities.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
-                                       f["stops"] if f["stops"] is not None else 9))
+    preferred.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
+                                  f["stops"] if f["stops"] is not None else 9))
+    other.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
+                              f["stops"] if f["stops"] is not None else 9))
     if max_options is None:
-        return priorities + non_priorities
+        return preferred + other
     # Compatibility for callers that intentionally request a bounded preview;
     # the production scanner never uses this cap before applying user filters.
-    priority_picks = priorities[:max_options]
-    picks = priority_picks + non_priorities[:max(0, max_options - len(priority_picks))]
+    preferred_picks = preferred[:max_options]
+    picks = preferred_picks + other[:max(0, max_options - len(preferred_picks))]
     return picks
