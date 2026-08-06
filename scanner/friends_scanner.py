@@ -361,10 +361,6 @@ class ScanSourceRun(RuntimeError):
     """Oznacza zmianę/awarię formatu źródła, a nie blokadę ruchu."""
 
 
-class ScanPartialRun(RuntimeError):
-    """Sprawdzony częściowo przebieg musi być widoczny jako nieudany w CI."""
-
-
 class CandidateVerificationDeferred(RuntimeError):
     """The candidate may fit, but the exact rendered source must be retried."""
 
@@ -1696,12 +1692,15 @@ def main():
         if source_unavailable:
             raise ScanSourceRun("Google zmienił lub zwrócił uszkodzoną strukturę danych; skan został bezpiecznie zatrzymany")
         if final_status == "partial":
-            raise ScanPartialRun("Skan zakończył się częściowo; nie wszystkie pozycje zostały sprawdzone")
+            # A bounded queue is expected to finish over several runs. The
+            # partial state is already persisted in scan_runs and failed
+            # items are scheduled for the hourly retry. Returning success
+            # here prevents GitHub from sending a false "scan failed" email
+            # when the scanner safely reaches its runtime/query budget.
+            log("Skan częściowy: pozostałe pozycje pozostają w kolejce i wrócą w kolejnym przebiegu")
     except ScanBlockedRun:
         raise
     except ScanSourceRun:
-        raise
-    except ScanPartialRun:
         raise
     except Exception as exc:
         api("PATCH", "scan_runs", body={"finished_at": datetime.utcnow().isoformat() + "Z", "query_count": executed_count, "offer_count": offers_count, "status": "error", "error": str(exc)[:500]}, params={"id": "eq." + run["id"]})

@@ -1841,11 +1841,12 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("validRoundTripPairCount(from, to, returnFrom, returnTo)", app)
         self.assertIn("const pairCount = trip === \"round_trip\"", app)
 
-    def test_partial_scan_is_recorded_and_fails_workflow_health_check(self):
+    def test_partial_scan_is_recorded_without_false_workflow_failure(self):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         self.assertIn('"partial" if task_errors or source_degraded', source)
         self.assertIn('if final_status == "partial":', source)
-        self.assertIn("raise ScanPartialRun", source)
+        self.assertIn("pozostałe pozycje pozostają w kolejce", source)
+        self.assertNotIn("raise ScanPartialRun", source)
 
     def test_migrations_have_an_automatic_deployment_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
