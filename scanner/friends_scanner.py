@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import gflights
@@ -1713,8 +1713,17 @@ def reserve_scan_slot_legacy():
         "limit": "50",
     })
     for row in recent or []:
-        started_at = str(row.get("started_at") or "")
-        if row.get("status") in {"queued", "running"} or started_at >= (now - timedelta(minutes=10)).isoformat():
+        try:
+            started_at = datetime.fromisoformat(str(row.get("started_at") or "").replace("Z", "+00:00"))
+            if started_at.tzinfo is not None:
+                started_at = started_at.astimezone(timezone.utc).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            # A malformed timestamp is not evidence of an active lease. The
+            # database RPC remains authoritative once its migration lands.
+            continue
+        active_recently = row.get("status") in {"queued", "running"} and started_at >= now - timedelta(minutes=30)
+        any_run_just_started = started_at >= now - timedelta(minutes=10)
+        if active_recently or any_run_just_started:
             return None
     reserved = api("POST", "scan_runs", body={
         "query_count": 0,

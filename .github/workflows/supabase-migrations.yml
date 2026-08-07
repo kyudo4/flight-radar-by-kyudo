@@ -6,6 +6,9 @@ on:
     paths:
       - "supabase/migrations/**"
       - "scripts/apply_supabase_migrations.py"
+      # Scanner changes can start depending on a newly added RPC. Reconcile
+      # migrations before the next scheduled scan even after a lost event.
+      - "scanner/friends_scanner.py"
       - ".github/workflows/supabase-migrations.yml"
   # Reconcile idempotently after GitHub incidents that lose a push-triggered
   # run before any job starts.

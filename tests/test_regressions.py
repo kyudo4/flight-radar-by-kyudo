@@ -1488,6 +1488,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             self.assertIn(path, checks)
         self.assertIn("Run pre-deploy verification", pages)
         self.assertIn("python -m unittest discover -s tests -v", pages)
+        self.assertIn('cron: "23 */6 * * *"', pages)
 
     def test_browser_smoke_check_has_the_same_chromium_fallback_as_scanner(self):
         source = (ROOT / "scripts" / "check_browser_runtime.py").read_text()
@@ -1575,6 +1576,27 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
         self.assertIn(("POST", "scan_runs", {"query_count": 0, "status": "queued", "blocked": False}, ANY), calls)
         run_scan.assert_called_once()
+
+    def test_legacy_scan_reservation_understands_timezone_timestamps(self):
+        recent = [{
+            "id": "active-slot",
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }]
+        with patch.object(scanner, "api", return_value=recent) as api_call:
+            self.assertIsNone(scanner.reserve_scan_slot_legacy())
+        api_call.assert_called_once()
+
+    def test_legacy_scan_reservation_ignores_abandoned_running_rows(self):
+        abandoned = [{
+            "id": "abandoned-slot",
+            "status": "running",
+            "started_at": (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat(),
+        }]
+        reserved = [{"id": "replacement-slot"}]
+        with patch.object(scanner, "api", side_effect=[abandoned, reserved]) as api_call:
+            self.assertEqual(scanner.reserve_scan_slot_legacy(), "replacement-slot")
+        self.assertEqual(api_call.call_count, 2)
 
     def test_startup_failure_closes_a_still_active_scan_reservation(self):
         calls = []
@@ -1773,7 +1795,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
         self.assertIn('app.js?v=20260806-2', html)
-        self.assertIn('styles.css?v=20260806-3', html)
+        self.assertIn('styles.css?v=20260807-1', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1935,6 +1957,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
     def test_migrations_have_an_automatic_deployment_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
         self.assertIn('"supabase/migrations/**"', workflow)
+        self.assertIn('"scanner/friends_scanner.py"', workflow)
         self.assertIn('cron: "7 */6 * * *"', workflow)
         self.assertIn("SUPABASE_ACCESS_TOKEN", workflow)
         self.assertIn("SUPABASE_DB_PASSWORD", workflow)
