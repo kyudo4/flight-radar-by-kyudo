@@ -1954,6 +1954,12 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("pozostałe pozycje pozostają w kolejce", source)
         self.assertNotIn("raise ScanPartialRun", source)
 
+    def test_readme_matches_current_partial_and_purchase_link_policy(self):
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn("Alert nie wymaga przejścia do ekranu płatności", readme)
+        self.assertIn("kończy workflow poprawnie", readme)
+        self.assertNotIn("zwraca niezerowy status procesu", readme)
+
     def test_migrations_have_an_automatic_deployment_workflow(self):
         workflow = (ROOT / ".github" / "workflows" / "supabase-migrations.yml").read_text()
         self.assertIn('"supabase/migrations/**"', workflow)

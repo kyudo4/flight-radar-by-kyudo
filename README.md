@@ -100,9 +100,11 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
 - Telegram wysyła wszystkie oferty spełniające filtry monitora — rating
   gwiazdkowy jest informacyjny i nie blokuje alertu. Reguły antyduplikatów,
   nowych linii i ponownego alertu po spadku ceny nadal obowiązują;
-- wynik z lekkiego odczytu Google oraz artykuł RSS mogą być widoczne w panelu
-  jako „Do potwierdzenia”, ale nie wywołują alertu Telegram. Alert wymaga
-  jawnego potwierdzenia dokładnego linku rezerwacji przez picker ofert;
+- wynik z lekkiego odczytu Google oraz artykuł RSS mogą być dostępne po wybraniu
+  w panelu również cen niepotwierdzonych. Domyślny widok pokazuje tylko aktualne,
+  kompletne wyniki Google. Alert nie wymaga przejścia do ekranu płatności ani
+  osobnego linku zakupowego, ale musi mieć potwierdzoną cenę i parametry lotu;
+  przy podróży tam i z powrotem wymagane są również szczegóły odcinka powrotnego;
 - alert o nowej najniższej cenie jest zawsze włączony i nie jest osobnym
   ustawieniem monitora;
 - cena jest zapisywana w historii, a oferta bez potwierdzenia przez 24 godziny
@@ -176,9 +178,9 @@ Odpowiedź Google `409` jest traktowana jak blokada już przy pierwszym żądani
 Przejściowy błąd parsera pojedynczej trasy dostaje jedną dodatkową próbę, a pozycja
 wraca do cogodzinnego retry. Jeżeli część tras przejdzie, przebieg kończy się
 statusem `partial`, zapisuje pokrycie kolejki, liczbę błędów i liczbę odłożonych pozycji
-oraz zwraca niezerowy status procesu, żeby GitHub nie oznaczał zdegradowanego skanu jako
-pełnego sukcesu; historia zapisuje trasę, datę powrotu i klasę, której nie udało się
-odczytać. Twarda blokada Google nadal zatrzymuje
+oraz kończy workflow poprawnie, ponieważ pozostałe pozycje są bezpiecznie zachowane
+do cogodzinnej próby naprawczej. Historia zapisuje trasę, datę powrotu i klasę,
+której nie udało się odczytać. Twarda blokada Google nadal zatrzymuje
 kolektor natychmiast, żeby nie pogłębiać blokady. Skaner nie ocenia ani nie wysyła
 ofert, jeżeli nie może odczytać profilu preferencji użytkownika.
 
