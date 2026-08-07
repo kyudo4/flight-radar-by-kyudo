@@ -1696,6 +1696,46 @@ def run_reserved_scan():
         raise
 
 
+def reserve_scan_slot_legacy():
+    """Reserve a scan when the new database RPC is not deployed yet.
+
+    This is only a compatibility path for databases caught between the code
+    deployment and the migration deployment. The RPC remains the authoritative
+    atomic lease once available; this fallback prevents an old database from
+    turning every scheduled run into an immediate failure.
+    """
+    now = datetime.utcnow()
+    recent_since = (now - timedelta(minutes=30)).isoformat() + "Z"
+    recent = api("GET", "scan_runs", params={
+        "started_at": "gte." + recent_since,
+        "select": "id,status,started_at",
+        "order": "started_at.desc",
+        "limit": "50",
+    })
+    for row in recent or []:
+        started_at = str(row.get("started_at") or "")
+        if row.get("status") in {"queued", "running"} or started_at >= (now - timedelta(minutes=10)).isoformat():
+            return None
+    reserved = api("POST", "scan_runs", body={
+        "query_count": 0,
+        "status": "queued",
+        "blocked": False,
+    })
+    if not reserved:
+        raise RuntimeError("Awaryjna rezerwacja skanu nie zwróciła identyfikatora")
+    return str(reserved[0]["id"])
+
+
+def missing_scan_lease_rpc(exc):
+    text = str(exc).lower()
+    return any(marker in text for marker in (
+        "pgrst202",
+        "could not find the function",
+        "reserve_scan_slot()",
+        "function public.reserve_scan_slot",
+    ))
+
+
 def main():
     global RESERVED_RUN_ID
     if not SUPABASE_URL or not SERVICE_KEY or not TG_TOKEN:
@@ -1712,7 +1752,10 @@ def main():
         try:
             reserved = api("POST", "rpc/reserve_scan_slot", body={})
         except Exception as exc:
-            raise SystemExit("Nie udało się zarezerwować slotu skanu: %s" % str(exc)[:180])
+            if not missing_scan_lease_rpc(exc):
+                raise SystemExit("Nie udało się zarezerwować slotu skanu: %s" % str(exc)[:180])
+            log("Brak nowej funkcji reserve_scan_slot; używam awaryjnej rezerwacji zgodnej ze starszą bazą")
+            reserved = reserve_scan_slot_legacy()
         if not reserved:
             log("Pominięto przebieg: inny skan już trwa lub został uruchomiony przed chwilą")
             return

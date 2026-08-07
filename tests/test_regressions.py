@@ -4,7 +4,7 @@ import unittest
 import urllib.error
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scanner"))
@@ -1550,6 +1550,31 @@ class FlightRadarRegressionTests(unittest.TestCase):
             scanner.main()
         api_call.assert_called_once_with("POST", "rpc/reserve_scan_slot", body={})
         run_scan.assert_not_called()
+
+    def test_scheduled_scan_uses_legacy_reservation_when_lease_migration_is_missing(self):
+        calls = []
+
+        def fake_api(method, path, body=None, params=None):
+            calls.append((method, path, body, params))
+            if path == "rpc/reserve_scan_slot":
+                raise RuntimeError("PGRST202: Could not find the function public.reserve_scan_slot")
+            if method == "GET" and path == "scan_runs":
+                return []
+            if method == "POST" and path == "scan_runs":
+                return [{"id": "legacy-slot-1"}]
+            return []
+
+        with patch.object(scanner, "SUPABASE_URL", "https://example.supabase.co"), \
+             patch.object(scanner, "SERVICE_KEY", "service-key"), \
+             patch.object(scanner, "TG_TOKEN", "telegram-token"), \
+             patch.object(scanner, "PROCESS_TELEGRAM_ONLY", False), \
+             patch.object(scanner, "RESERVED_RUN_ID", ""), \
+             patch.object(scanner, "api", side_effect=fake_api), \
+             patch.object(scanner, "run_reserved_scan") as run_scan:
+            scanner.main()
+
+        self.assertIn(("POST", "scan_runs", {"query_count": 0, "status": "queued", "blocked": False}, ANY), calls)
+        run_scan.assert_called_once()
 
     def test_startup_failure_closes_a_still_active_scan_reservation(self):
         calls = []
