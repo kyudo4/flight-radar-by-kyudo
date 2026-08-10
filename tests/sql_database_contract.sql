@@ -75,7 +75,20 @@ create table public.telegram_auth_attempts (
 
 alter table public.flight_offers
   add column verification_status text not null default 'verified',
-  add column verification_note text not null default '';
+  add column verification_note text not null default '',
+  add column fingerprint text,
+  add column source text,
+  add column return_date date,
+  add column trip_type text not null default 'one_way',
+  add column stops integer,
+  add column aircraft text,
+  add column link text,
+  add column tags jsonb not null default '{}'::jsonb;
+alter table public.user_matches
+  add column stars integer not null default 3,
+  add column notified_at timestamptz,
+  add column updated_at timestamptz not null default now(),
+  add column visible boolean not null default true;
 create or replace function public.offer_matches_monitor_filters(p_offer_id uuid, p_filters jsonb)
 returns boolean language sql stable as $$ select true $$;
 
