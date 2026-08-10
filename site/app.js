@@ -147,6 +147,24 @@
     renderAirportPicker(kind);
   }
 
+  function setupDatePickers() {
+    document.querySelectorAll('#monitorDialog input[type="date"]').forEach(input => {
+      input.addEventListener("pointerdown", event => {
+        if (input.disabled || input.readOnly || typeof input.showPicker !== "function") return;
+        try {
+          // Open from the whole field, including the custom dark-theme icon.
+          // Prevent the native action only after showPicker succeeds, so
+          // Safari and older browsers keep their built-in fallback.
+          input.showPicker();
+          event.preventDefault();
+        } catch (_error) {
+          // The native date input handles the click when showPicker is absent
+          // or the browser refuses the programmatic picker.
+        }
+      });
+    });
+  }
+
   async function init() {
     $("themeButton").onclick = () => { document.body.classList.toggle("dark"); localStorage.setItem("afr-theme", document.body.classList.contains("dark") ? "dark" : "light"); };
     if (localStorage.getItem("afr-theme") === "dark") document.body.classList.add("dark");
@@ -154,6 +172,7 @@
     $("telegramLoginButton").onclick = signInWithTelegram;
     await loadAirportData();
     setupAirportPicker("origins"); setupAirportPicker("destinations");
+    setupDatePickers();
     if (!configReady || !window.supabase) { show("setupView"); return; }
     client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
     const { data, error } = await client.auth.getSession();

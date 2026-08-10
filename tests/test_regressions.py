@@ -1446,7 +1446,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260806-2', html)
+        self.assertIn('app.js?v=20260810-1', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1794,8 +1794,8 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260806-2', html)
-        self.assertIn('styles.css?v=20260807-1', html)
+        self.assertIn('app.js?v=20260810-1', html)
+        self.assertIn('styles.css?v=20260810-1', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -2006,10 +2006,15 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_dark_theme_keeps_monitor_date_picker_visible(self):
         styles = (ROOT / "site" / "styles.css").read_text()
-        self.assertIn('body.dark input[type="date"]{color-scheme:dark;background-image', styles)
+        app = (ROOT / "site" / "app.js").read_text()
+        self.assertIn('body.dark input[type="date"]{position:relative;cursor:pointer;color-scheme:dark;background-image', styles)
         self.assertIn('body.dark input[type="date"]::-webkit-calendar-picker-indicator', styles)
         self.assertIn("background-image:url(\"data:image/svg+xml", styles)
+        self.assertIn("right:0;top:0;width:46px;height:100%", styles)
         self.assertIn("opacity:0", styles)
+        self.assertIn("function setupDatePickers()", app)
+        self.assertIn('input.showPicker();', app)
+        self.assertIn('setupDatePickers();', app)
 
     def test_quality_features_are_wired_across_scanner_database_and_panel(self):
         app = (ROOT / "site" / "app.js").read_text()
