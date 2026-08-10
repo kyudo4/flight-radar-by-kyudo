@@ -1426,7 +1426,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_offer_search_includes_city_names(self):
         app = (ROOT / "site" / "app.js").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260810000100_offer_city_code_search.sql").read_text()
         self.assertIn('${offer.route || ""} ${routeName(offer.route)}', app)
+        self.assertIn("function airportCodesForQuery(query)", app)
+        self.assertIn("p_airport_codes: airportCodes", app)
+        self.assertIn("p_airport_codes text[]", migration)
+        self.assertIn("upper(offer.origin) = any", migration)
+        self.assertIn("upper(offer.destination) = any", migration)
         self.assertIn("const airportLabel =", app)
         self.assertIn("map(airportLabel)", app)
 
@@ -1446,7 +1452,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260810-1', html)
+        self.assertIn('app.js?v=20260810-2', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1794,7 +1800,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260810-1', html)
+        self.assertIn('app.js?v=20260810-2', html)
         self.assertIn('styles.css?v=20260810-1', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):

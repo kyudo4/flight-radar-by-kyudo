@@ -73,6 +73,12 @@ create table public.telegram_auth_attempts (
   attempted_at timestamptz not null default now()
 );
 
+alter table public.flight_offers
+  add column verification_status text not null default 'verified',
+  add column verification_note text not null default '';
+create or replace function public.offer_matches_monitor_filters(p_offer_id uuid, p_filters jsonb)
+returns boolean language sql stable as $$ select true $$;
+
 create table public.monitor_scan_items (
   id uuid primary key default gen_random_uuid(),
   monitor_id uuid not null references public.monitors(id) on delete cascade,
@@ -98,6 +104,7 @@ create unique index monitor_scan_items_round_trip_key
 \ir ../supabase/migrations/20260802000700_preference_integrity.sql
 \ir ../supabase/migrations/20260802000800_atomic_scan_queue.sql
 \ir ../supabase/migrations/20260803000100_final_audit_hardening.sql
+\ir ../supabase/migrations/20260810000100_offer_city_code_search.sql
 
 insert into public.profiles(id) values ('00000000-0000-0000-0000-000000000001');
 insert into public.monitors(id, user_id, filters) values (

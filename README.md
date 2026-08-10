@@ -122,6 +122,9 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   a wykluczone linie są odrzucane przed zapisem;
 - panel ma dodatkowe lokalne filtrowanie wyników po trasie/linii, klasie,
   minimalnej ocenie oraz sortowanie po cenie, ocenie i świeżości;
+- wyszukiwarka ofert rozpoznaje nazwę miasta oraz kod IATA lotniska, np. „Tokio”,
+  „HND” albo „NRT”; wyszukiwanie działa przed paginacją, więc nie gubi wyników
+  znajdujących się na kolejnych stronach;
 - panel pobiera oferty stronami po 40 i pozwala wczytać całą historię;
 - zapisanie lub wznowienie zmienionego monitora ustawia jego kolejkę do sprawdzenia
   w najbliższym przebiegu, zamiast czekać na poprzedni termin;

@@ -90,6 +90,15 @@
     }).slice(0, 8);
   }
 
+  function airportCodesForQuery(query) {
+    const needle = String(query || "").trim().toLocaleLowerCase("pl-PL");
+    if (!needle) return [];
+    return Object.entries(AIRPORTS)
+      .filter(([code, city]) => `${code} ${city}`.toLocaleLowerCase("pl-PL").includes(needle))
+      .map(([code]) => code)
+      .slice(0, 100);
+  }
+
   function renderAirportPicker(kind, query = "") {
     const input = $(`monitor${kind === "origins" ? "Origins" : "Destinations"}`);
     const suggestions = $(`monitor${kind === "origins" ? "Origins" : "Destinations"}Suggestions`);
@@ -410,6 +419,7 @@
     const displayStars = Number($("offerStarsFilter")?.value || 0);
     const displayFreshness = $("offerFreshnessFilter")?.value || "fresh";
     const displaySort = $("offerSort")?.value || "newest";
+    const airportCodes = airportCodesForQuery(displayQuery);
     try {
       // The RPC applies monitor filters before pagination. The compatibility
       // path below remains available while an older database is deploying the
@@ -422,6 +432,7 @@
         p_min_stars: displayStars,
         p_freshness: displayFreshness,
         p_sort: displaySort,
+        p_airport_codes: airportCodes,
       });
       if (!current.error) {
         const page = (current.data || []).map(row => ({
