@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import unittest
 import urllib.error
@@ -124,6 +125,17 @@ class FlightRadarRegressionTests(unittest.TestCase):
         html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
         flights = google_parser.parse(html)
         self.assertEqual(flights[0]["price_pln"], 4500)
+
+    def test_google_parser_does_not_treat_empty_legacy_slot_as_final(self):
+        segment = [None, None, "Qatar", "POZ", "Poznań Airport", "Bangkok", "BKK", None,
+                   [6], None, [8, 30], 150, [], 1, "", [], 3, "A350", None, 0,
+                   [2026, 9, 1], [2026, 9, 1]]
+        groups = [[["business", ["Qatar Airways"], [segment]], [[0, 4500]]]]
+        payload = [None, None, None, [], None, [groups]]
+        html = '<script class="ds:1 rollout-a">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+        flights = google_parser.parse(html)
+        self.assertEqual(flights[0]["price_pln"], 4500)
+        self.assertEqual(flights[0]["airline_name"], "Qatar Airways")
 
     def test_rendered_google_card_parser_uses_accessible_flight_data(self):
         label = (
@@ -398,6 +410,17 @@ class FlightRadarRegressionTests(unittest.TestCase):
                           side_effect=google_browser.BrowserCapacityError("limit 400")):
             with self.assertRaises(google_browser.BrowserCapacityError):
                 google_browser._load_cards(Page(), "https://google.test")
+
+    def test_rendered_browser_honors_full_queue_budget_of_800(self):
+        with patch.dict(os.environ, {"GOOGLE_BROWSER_QUERY_LIMIT": "800"}):
+            with patch.object(google_browser, "_QUERY_COUNT", 500):
+                google_browser._consume_query_slot()
+                self.assertEqual(google_browser._QUERY_COUNT, 501)
+            with patch.object(google_browser, "_QUERY_COUNT", 799):
+                google_browser._consume_query_slot()
+                self.assertEqual(google_browser._QUERY_COUNT, 800)
+                with self.assertRaises(google_browser.BrowserCapacityError):
+                    google_browser._consume_query_slot()
 
     def test_round_trip_without_exact_return_is_an_empty_result_not_source_failure(self):
         outbound = [{

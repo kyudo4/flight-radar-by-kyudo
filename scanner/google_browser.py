@@ -208,7 +208,11 @@ def _wait_for_cards(page, timeout_ms=25000):
 def _consume_query_slot():
     """Count every rendered page load, including round-trip sub-pages."""
     global _QUERY_COUNT
-    maximum = max(1, min(500, int(os.environ.get("GOOGLE_BROWSER_QUERY_LIMIT", "80"))))
+    # Keep a hard ceiling, but honor the 800-page budget configured for an
+    # explicit full-queue scan. The previous 500 clamp silently discarded
+    # 300 pages even though the workflow and administrator panel requested
+    # the larger bounded pass.
+    maximum = max(1, min(1000, int(os.environ.get("GOOGLE_BROWSER_QUERY_LIMIT", "80"))))
     if _QUERY_COUNT >= maximum:
         raise BrowserCapacityError(
             "Awaryjny odczyt Chrome osiągnął bezpieczny limit %d zapytań" % maximum

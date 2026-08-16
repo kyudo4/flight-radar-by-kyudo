@@ -40,7 +40,11 @@ def _datetime(date_value, time_value):
 def _script_text(html):
     parser = LexborHTMLParser(html)
     for script in parser.css("script"):
-        if (script.attributes.get("class") or "") == "ds:1":
+        # Google may append rollout/experiment classes to the data script.
+        # Treat ``ds:1`` as a class token instead of requiring an exact
+        # attribute value, otherwise a harmless extra class hides all fares.
+        classes = (script.attributes.get("class") or "").split()
+        if "ds:1" in classes:
             return script.text()
     raise GoogleParseError("Google nie zwrócił danych ds:1")
 
@@ -124,10 +128,14 @@ def _find_groups(payload):
     if not isinstance(payload, list):
         raise GoogleParseError("Nieprawidłowa struktura danych lotów Google")
 
+    legacy_empty = False
     if len(payload) > 3 and payload[3] is not None:
         legacy = payload[3]
         if isinstance(legacy, list) and (not legacy or legacy == [[]]):
-            raise GoogleNoFlights("Google nie znalazł lotów")
+            # An empty legacy slot is no longer conclusive. During Google UI
+            # rollouts the real groups can already live elsewhere in the same
+            # payload while the old position remains an empty placeholder.
+            legacy_empty = True
         if isinstance(legacy, list) and legacy and _looks_like_group(legacy[0]):
             return legacy[0]
 
@@ -143,6 +151,8 @@ def _find_groups(payload):
         for child in value[:80]:
             if isinstance(child, list):
                 queue.append((child, depth + 1))
+    if legacy_empty:
+        raise GoogleNoFlights("Google nie znalazł lotów")
     raise GoogleParseError("Nieprawidłowa struktura danych lotów Google")
 
 
