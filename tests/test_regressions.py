@@ -137,6 +137,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(flights[0]["price_pln"], 4500)
         self.assertEqual(flights[0]["airline_name"], "Qatar Airways")
 
+    def test_google_parser_does_not_report_no_flights_from_ambiguous_empty_slot(self):
+        payload = [None, None, None, []]
+        html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+        with self.assertRaises(google_parser.GoogleParseError) as context:
+            google_parser.parse(html)
+        self.assertNotIsInstance(context.exception, google_parser.GoogleNoFlights)
+        self.assertIn("Nieprawidłowa struktura", str(context.exception))
+
     def test_rendered_google_card_parser_uses_accessible_flight_data(self):
         label = (
             "From 6,653 Polish zlotys round trip total. 2 stops flight with KLM and Air France. "

@@ -128,14 +128,8 @@ def _find_groups(payload):
     if not isinstance(payload, list):
         raise GoogleParseError("Nieprawidłowa struktura danych lotów Google")
 
-    legacy_empty = False
     if len(payload) > 3 and payload[3] is not None:
         legacy = payload[3]
-        if isinstance(legacy, list) and (not legacy or legacy == [[]]):
-            # An empty legacy slot is no longer conclusive. During Google UI
-            # rollouts the real groups can already live elsewhere in the same
-            # payload while the old position remains an empty placeholder.
-            legacy_empty = True
         if isinstance(legacy, list) and legacy and _looks_like_group(legacy[0]):
             return legacy[0]
 
@@ -151,8 +145,10 @@ def _find_groups(payload):
         for child in value[:80]:
             if isinstance(child, list):
                 queue.append((child, depth + 1))
-    if legacy_empty:
-        raise GoogleNoFlights("Google nie znalazł lotów")
+    # An empty legacy slot is not proof that a route has no flights. Google
+    # regularly leaves that placeholder empty while moving results elsewhere.
+    # Keep this as a parse error so the caller verifies the page using the
+    # rendered-browser fallback instead of silently returning zero offers.
     raise GoogleParseError("Nieprawidłowa struktura danych lotów Google")
 
 
