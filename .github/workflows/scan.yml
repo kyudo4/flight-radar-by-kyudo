@@ -22,6 +22,11 @@ on:
         required: false
         type: boolean
         default: false
+      override_scan_lease:
+        description: "Odzyskaj stary porzucony slot po anulowanym skanie administratora"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   scan:
@@ -63,5 +68,6 @@ jobs:
           FULL_QUEUE_STANDARD_LIMIT: "800"
           FULL_QUEUE_FIRST_LIMIT: "150"
           FORCE_SCAN: ${{ (inputs.force_scan == true || inputs.full_queue_scan == true) && 'true' || 'false' }}
+          OVERRIDE_SCAN_LEASE: ${{ inputs.override_scan_lease == true && 'true' || 'false' }}
           RESERVED_RUN_ID: ${{ inputs.reserved_run_id || '' }}
         run: python scanner/friends_scanner.py

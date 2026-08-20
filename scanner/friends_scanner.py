@@ -37,6 +37,7 @@ MAX_MONITOR_COMBINATIONS = 5000
 MAX_MONITOR_DATE_WINDOW_DAYS = 14
 SCAN_INTERVAL_HOURS = 6
 FORCE_SCAN = os.environ.get("FORCE_SCAN", "false").lower() == "true"
+OVERRIDE_SCAN_LEASE = os.environ.get("OVERRIDE_SCAN_LEASE", "false").lower() == "true"
 FULL_QUEUE_SCAN = os.environ.get("FULL_QUEUE_SCAN", "false").lower() == "true"
 FULL_QUEUE_STANDARD_LIMIT = max(1, min(1000, int(os.environ.get("FULL_QUEUE_STANDARD_LIMIT", "800"))))
 FULL_QUEUE_FIRST_LIMIT = max(1, min(200, int(os.environ.get("FULL_QUEUE_FIRST_LIMIT", "150"))))
@@ -1759,9 +1760,10 @@ def main():
         # GitHub can start two cron jobs close together; the database is the
         # durable source of truth and lets the losing job exit successfully.
         try:
-            reserved = api("POST", "rpc/reserve_scan_slot", body={})
+            reservation_rpc = "force_reserve_scan_slot" if OVERRIDE_SCAN_LEASE else "reserve_scan_slot"
+            reserved = api("POST", "rpc/" + reservation_rpc, body={})
         except Exception as exc:
-            if not missing_scan_lease_rpc(exc):
+            if OVERRIDE_SCAN_LEASE or not missing_scan_lease_rpc(exc):
                 raise SystemExit("Nie udało się zarezerwować slotu skanu: %s" % str(exc)[:180])
             log("Brak nowej funkcji reserve_scan_slot; używam awaryjnej rezerwacji zgodnej ze starszą bazą")
             reserved = reserve_scan_slot_legacy()

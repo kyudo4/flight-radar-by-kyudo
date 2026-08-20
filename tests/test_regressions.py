@@ -1634,10 +1634,21 @@ class FlightRadarRegressionTests(unittest.TestCase):
         source = (ROOT / "scanner" / "friends_scanner.py").read_text()
         migration = (ROOT / "supabase" / "migrations" / "20260806000300_durable_scan_slot_lease.sql").read_text()
         self.assertNotIn("group: friends-backend", workflow)
-        self.assertIn('api("POST", "rpc/reserve_scan_slot", body={})', source)
+        self.assertIn('reservation_rpc = "force_reserve_scan_slot" if OVERRIDE_SCAN_LEASE else "reserve_scan_slot"', source)
         self.assertIn("Pominięto przebieg: inny skan już trwa", source)
         self.assertIn("status in ('queued', 'running')", migration)
         self.assertIn("interval '30 minutes'", migration)
+
+    def test_admin_override_can_recover_a_cancelled_scan_lease(self):
+        workflow = (ROOT / ".github" / "workflows" / "scan.yml").read_text()
+        source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        migration = (ROOT / "supabase" / "migrations" / "20260820000300_force_scan_lease_recovery.sql").read_text()
+        self.assertIn("override_scan_lease:", workflow)
+        self.assertIn("OVERRIDE_SCAN_LEASE", workflow)
+        self.assertIn('"force_reserve_scan_slot" if OVERRIDE_SCAN_LEASE else "reserve_scan_slot"', source)
+        self.assertIn("create or replace function public.force_reserve_scan_slot()", migration)
+        self.assertIn("status in ('queued', 'running')", migration)
+        self.assertIn("interval '10 minutes'", migration)
 
     def test_scheduled_scan_exits_successfully_when_database_slot_is_busy(self):
         with patch.object(scanner, "SUPABASE_URL", "https://example.supabase.co"), \
