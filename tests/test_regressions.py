@@ -2031,6 +2031,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn('freshness === "fresh" && !verified', app)
         self.assertIn("p_freshness = 'fresh' and offer.verification_status = 'verified'", migration)
 
+    def test_historical_one_way_google_fares_are_restored_to_current_view(self):
+        migration = (ROOT / "supabase/migrations/20260820000100_google_one_way_visibility.sql").read_text()
+        self.assertIn("trip_type = 'one_way'", migration)
+        self.assertIn("lower(coalesce(source, '')) like '%google%'", migration)
+        self.assertIn("verification_status = 'verified'", migration)
+        self.assertIn("where tag <> to_jsonb('Do potwierdzenia'::text)", migration)
+
     def test_telegram_auth_requires_invite_only_for_new_profiles(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
         app = (ROOT / "site" / "app.js").read_text()
