@@ -964,6 +964,18 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("SQ", {flight["airline"] for flight in picks})
         self.assertEqual(picks[0]["airline"], "SQ")
 
+    def test_shorter_variant_is_not_hidden_by_cheaper_same_airline_card(self):
+        flights = [
+            {"airline": "QR", "airline_name": "Qatar Airways", "price_pln": 1450, "duration_h": 34.0, "stops": 1},
+            {"airline": "QR", "airline_name": "Qatar Airways", "price_pln": 1650, "duration_h": 17.0, "stops": 1},
+        ]
+        picks = gflights.cheapest_picks(flights, set())
+        self.assertEqual(len(picks), 2)
+        self.assertEqual(
+            [flight["duration_h"] for flight in picks],
+            [34.0, 17.0],
+        )
+
     def test_unknown_duration_or_stops_is_rejected(self):
         filters = {"max_duration_h": 24, "max_stops": 2}
         self.assertFalse(scanner.quality({"duration_h": None, "stops": 1}, filters))

@@ -221,32 +221,31 @@ def _best_value(flights):
 
 
 def cheapest_picks(flights, preferred_codes, max_options=None):
-    """Najlepsze warianty różnych przewoźników.
+    """Order Google cards without hiding viable variants.
 
-    Google Flights potrafi pokazać tańszą linię po poprzednim skanie. Dlatego
-    dla każdej linii wybieramy najrozsądniejszy wariant. Domyślnie zwracamy
-    najlepszy wariant każdej znalezionej linii; filtrowanie budżetu, czasu i
-    przesiadek odbywa się dopiero po tej funkcji. Dzięki temu linia wybrana
-    przez użytkownika nie zginie za innymi ofertami.
+    A source query can contain a cheap but very long itinerary and a slightly
+    more expensive short itinerary from the same carrier. Choosing one card
+    per airline before applying each monitor's duration/stops filters used to
+    discard the short card and produced false empty results. Keep every source
+    card in the default production path; only the explicit compatibility cap
+    remains bounded for callers that request a preview.
     """
     if not flights:
         return []
-    by_airline = {}
-    for flight in flights:
-        key = flight["airline_name"] or flight["airline"] or "unknown"
-        by_airline.setdefault(key, []).append(flight)
-    candidates = [_best_value(group) for group in by_airline.values()]
-    candidates.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
-                                   f["stops"] if f["stops"] is not None else 9))
-    preferred = [f for f in candidates if f["airline"] in preferred_codes]
-    other = [f for f in candidates if f["airline"] not in preferred_codes]
-    # The source query already returns all visible Google cards. This ordering
-    # makes the scanner process the requested carriers first, so a
-    # later CAPTCHA or runtime limit cannot systematically skip them.
-    preferred.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
-                                  f["stops"] if f["stops"] is not None else 9))
-    other.sort(key=lambda f: (f["price_pln"], f["duration_h"] or 999,
-                              f["stops"] if f["stops"] is not None else 9))
+    def sort_key(flight):
+        return (flight["price_pln"], flight["duration_h"] or 999,
+                flight["stops"] if flight["stops"] is not None else 9)
+
+    preferred = sorted(
+        [flight for flight in flights if flight.get("airline") in preferred_codes],
+        key=sort_key,
+    )
+    other = sorted(
+        [flight for flight in flights if flight.get("airline") not in preferred_codes],
+        key=sort_key,
+    )
+    # Preferred carriers are processed first, but no carrier's alternate card
+    # is removed before the monitor-specific budget/time/stop filters run.
     if max_options is None:
         return preferred + other
     # Compatibility for callers that intentionally request a bounded preview;
