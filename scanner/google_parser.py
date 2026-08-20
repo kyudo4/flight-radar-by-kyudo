@@ -24,7 +24,12 @@ class GoogleNoFlights(GoogleParseError):
 def _time(value):
     if not isinstance(value, (list, tuple)) or not value:
         raise GoogleParseError("Brak godziny odlotu/przylotu")
-    return int(value[0]), int(value[1]) if len(value) > 1 else 0
+    # Google serializes midnight as ``[null, minute]`` on some cards. A null
+    # hour/minute in this otherwise valid time tuple means zero, not a missing
+    # itinerary field (for example ``[null, 5]`` is 00:05).
+    hour = 0 if value[0] is None else int(value[0])
+    minute = 0 if len(value) < 2 or value[1] is None else int(value[1])
+    return hour, minute
 
 
 def _date(value):
@@ -99,52 +104,58 @@ def _split_round_trip(segments, origin, destination, return_date):
     return segments, [], False
 
 
+def _looks_like_offer_row(row):
+    """Recognize one Google flight card before decoding its details."""
+    if not isinstance(row, list) or len(row) < 2:
+        return False
+    flight = row[0]
+    price = row[1]
+    return (isinstance(flight, list) and len(flight) > 2
+            and isinstance(flight[2], list)
+            and isinstance(price, list))
+
+
 def _looks_like_group(value):
     """Recognize a flight-group list without relying on one payload index."""
     if not isinstance(value, list) or not value:
         return False
-    checked = 0
-    valid = 0
-    for row in value[:12]:
-        checked += 1
-        if not isinstance(row, list) or len(row) < 2:
-            continue
-        flight = row[0]
-        price = row[1]
-        if (isinstance(flight, list) and len(flight) > 2
-                and isinstance(flight[2], list)
-                and isinstance(price, list)):
-            valid += 1
+    checked = min(len(value), 12)
+    valid = sum(1 for row in value[:checked] if _looks_like_offer_row(row))
     return valid > 0 and valid >= max(1, checked // 3)
 
 
 def _find_groups(payload):
-    """Find flight groups across Google payload layout revisions.
+    """Find and merge every flight-card group in a bounded payload walk.
 
-    The server response has moved the useful list several times. The legacy
-    path remains preferred, while bounded recursive discovery supports a
-    moved list and still rejects a genuinely malformed response.
+    Google may keep separate ``Top flights`` and ``Other flights`` lists. The
+    old first-match search silently discarded every later list, so a valid
+    short/cheap card could disappear before the user's filters ran.
     """
     if not isinstance(payload, list):
         raise GoogleParseError("Nieprawidłowa struktura danych lotów Google")
 
-    if len(payload) > 3 and payload[3] is not None:
-        legacy = payload[3]
-        if isinstance(legacy, list) and legacy and _looks_like_group(legacy[0]):
-            return legacy[0]
-
     queue = deque([(payload, 0)])
     visited = 0
+    rows = []
+    seen_rows = set()
     while queue and visited < 10000:
         value, depth = queue.popleft()
         visited += 1
         if depth > 8 or not isinstance(value, list):
             continue
         if _looks_like_group(value):
-            return value
+            for row in value:
+                if _looks_like_offer_row(row) and id(row) not in seen_rows:
+                    rows.append(row)
+                    seen_rows.add(id(row))
+            # A recognized group contains card internals that can themselves
+            # resemble nested groups. Do not descend and duplicate them.
+            continue
         for child in value[:80]:
             if isinstance(child, list):
                 queue.append((child, depth + 1))
+    if rows:
+        return rows
     # An empty legacy slot is not proof that a route has no flights. Google
     # regularly leaves that placeholder empty while moving results elsewhere.
     # Keep this as a parse error so the caller verifies the page using the
@@ -163,6 +174,7 @@ def parse(html, origin=None, destination=None, return_date=None):
     groups = _find_groups(payload)
 
     flights = []
+    unreadable_cards = 0
     for row in groups:
         try:
             flight = row[0]
@@ -170,6 +182,7 @@ def parse(html, origin=None, destination=None, return_date=None):
             airlines = [str(value) for value in (flight[1] or []) if value]
             price = row[1][0][1]
             if not segments or price in (None, ""):
+                unreadable_cards += 1
                 continue
             outbound_segments, return_segments, return_verified = _split_round_trip(
                 segments, origin, destination, return_date
@@ -194,8 +207,17 @@ def parse(html, origin=None, destination=None, return_date=None):
                 "return_stops": inbound["stops"] if inbound else None,
                 "return_departure": inbound["departure"] if inbound else "",
             })
-        except (IndexError, KeyError, TypeError, ValueError, OverflowError):
+        except (GoogleParseError, IndexError, KeyError, TypeError, ValueError, OverflowError):
+            unreadable_cards += 1
             continue
+    # Returning a partial card set is more dangerous than reporting a parse
+    # error: the omitted card can be the only one satisfying time/stops/budget.
+    # Let the caller use the rendered-browser fallback for the whole query.
+    if unreadable_cards:
+        raise GoogleParseError(
+            "Google zwrócił niepełny zestaw ofert (%d nieczytelnych kart)"
+            % unreadable_cards
+        )
     if not flights:
         raise GoogleParseError("Google zwrócił grupy bez czytelnych ofert")
     return flights

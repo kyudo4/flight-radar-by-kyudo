@@ -1557,10 +1557,10 @@ def run_reserved_scan():
                         code = gflights.airline_code(str(airline))
                         if code:
                             preferred_codes.add(code)
-                # Select one representative per airline, but do not cap the
-                # number of airlines before applying each user's filters. A
-                # carrier selected in a monitor is processed first, but no
-                # hidden global priority list can reorder or suppress fares.
+                # Process every source card before applying each user's
+                # filters. Preferred carriers are ordered first, but neither
+                # another group nor another card from the same carrier may be
+                # hidden before budget/time/stops are checked.
                 for flight in gflights.cheapest_picks(flights, preferred_codes):
                     for monitor in related:
                         try:

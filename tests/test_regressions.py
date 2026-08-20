@@ -145,6 +145,49 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertNotIsInstance(context.exception, google_parser.GoogleNoFlights)
         self.assertIn("Nieprawidłowa struktura", str(context.exception))
 
+    def test_google_parser_merges_separate_top_and_other_flight_groups(self):
+        def row(airline, price, departure_hour):
+            segment = [None, None, airline, "WAW", "Warsaw", "Manila", "MNL", None,
+                       [departure_hour], None, [departure_hour + 17], 150, [], 1, "", [], 3,
+                       "A350", None, 0, [2026, 10, 22], [2026, 10, 23]]
+            return [["economy", [airline], [segment]], [[0, price]]]
+
+        top_flights = [row("Etihad", 1450, 1)]
+        other_flights = [row("Qatar Airways", 1650, 2)]
+        payload = [None, None, None, [top_flights], None, [None, [other_flights]]]
+        html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+
+        flights = google_parser.parse(html)
+
+        self.assertEqual({flight["price_pln"] for flight in flights}, {1450, 1650})
+        self.assertEqual({flight["airline_name"] for flight in flights}, {"Etihad", "Qatar Airways"})
+
+    def test_google_parser_rejects_partial_card_set_instead_of_silent_loss(self):
+        segment = [None, None, "Etihad", "WAW", "Warsaw", "Manila", "MNL", None,
+                   [1], None, [18], 150, [], 1, "", [], 3, "A350", None, 0,
+                   [2026, 10, 22], [2026, 10, 23]]
+        valid = [["economy", ["Etihad"], [segment]], [[0, 1450]]]
+        unreadable = [["economy", ["Qatar Airways"], []], [[0, 1650]]]
+        payload = [None, None, None, [[valid, unreadable]]]
+        html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+
+        with self.assertRaises(google_parser.GoogleParseError) as context:
+            google_parser.parse(html)
+
+        self.assertIn("niepełny zestaw ofert", str(context.exception))
+
+    def test_google_parser_treats_null_hour_as_midnight(self):
+        segment = [None, None, "Philippine Airlines", "BKK", "Bangkok", "Manila", "MNL", None,
+                   [19, 30], None, [None, 5], 150, [], 1, "", [], 3, "A321", None, 0,
+                   [2026, 10, 23], [2026, 10, 24]]
+        payload = [None, None, None, [[[["economy", ["Philippine Airlines"], [segment]], [[0, 1450]]]]]]
+        html = '<script class="ds:1">AF_initDataCallback({data:' + json.dumps(payload) + ',x:1})</script>'
+
+        flight = google_parser.parse(html)[0]
+
+        self.assertEqual(flight["departure"], "19:30 – 00:05")
+        self.assertAlmostEqual(flight["duration_h"], 4 + 35 / 60, places=1)
+
     def test_rendered_google_card_parser_uses_accessible_flight_data(self):
         label = (
             "From 6,653 Polish zlotys round trip total. 2 stops flight with KLM and Air France. "
@@ -975,6 +1018,13 @@ class FlightRadarRegressionTests(unittest.TestCase):
             [flight["duration_h"] for flight in picks],
             [34.0, 17.0],
         )
+        matching = [
+            flight for flight in picks
+            if scanner.budget_ok(flight, {"budget_pln": 2000})
+            and scanner.quality(flight, {"max_duration_h": 20, "max_stops": 1})
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]["duration_h"], 17.0)
 
     def test_unknown_duration_or_stops_is_rejected(self):
         filters = {"max_duration_h": 24, "max_stops": 2}
