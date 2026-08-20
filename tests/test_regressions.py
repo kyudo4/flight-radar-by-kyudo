@@ -2038,6 +2038,11 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("verification_status = 'verified'", migration)
         self.assertIn("where tag <> to_jsonb('Do potwierdzenia'::text)", migration)
 
+    def test_restored_google_fares_are_reconciled_to_active_monitors(self):
+        migration = (ROOT / "supabase/migrations/20260820000200_reconcile_google_fares.sql").read_text()
+        self.assertIn("select id from public.monitors where status = 'active'", migration)
+        self.assertIn("perform public.reconcile_monitor_offers(monitor_row.id)", migration)
+
     def test_telegram_auth_requires_invite_only_for_new_profiles(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
         app = (ROOT / "site" / "app.js").read_text()
