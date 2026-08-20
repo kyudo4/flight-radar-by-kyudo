@@ -1026,6 +1026,33 @@ def reconcile_existing_monitor_matches(monitor):
     return ids
 
 
+def reconcile_active_monitor_offers(monitors, preference_cache):
+    """Propagate offers saved during this run to every matching monitor.
+
+    A Google query can be shared by several monitors, but the source task is
+    processed only for the monitors that currently own that queue row.  A
+    newly saved offer therefore needs one final, global reconciliation pass so
+    another monitor with matching route/date/cabin/filter rules does not wait
+    for its own queue item to be selected in a later batch.
+    """
+    sent = 0
+    errors = []
+    for monitor in monitors:
+        try:
+            offer_ids = reconcile_existing_monitor_matches(monitor)
+            if offer_ids:
+                sent += enqueue_reconciled_alerts(
+                    monitor, offer_ids, preference_cache[monitor["user_id"]]
+                )
+        except Exception as exc:
+            message = "Uzgadnianie końcowe ofert/%s: %s" % (
+                monitor["id"], str(exc)[:160]
+            )
+            errors.append(message)
+            log("Nie udało się uzgodnić ofert po skanie: %s" % message)
+    return sent, errors
+
+
 def enqueue_reconciled_alerts(monitor, offer_ids, preferences=None):
     """Create durable Telegram alerts for offers restored by reconciliation."""
     if not offer_ids:
@@ -1627,6 +1654,15 @@ def run_reserved_scan():
             except Exception as exc:
                 task_errors.append("RSS-%s-%s-%s/%s: %s" % (origin, dest, travel_date, monitor["id"], str(exc)[:120]))
                 log("Pominięto ofertę RSS po błędzie: %s" % task_errors[-1])
+        # A source task is shared only with monitors that own that exact queue
+        # row. Reconcile once more after Google/RSS processing so offers saved
+        # in this run become visible and alertable for every other active
+        # monitor whose filters also match them.
+        reconciled_sent, reconciliation_errors = reconcile_active_monitor_offers(
+            active, preference_cache
+        )
+        sent_count += reconciled_sent
+        task_errors.extend(reconciliation_errors)
         try:
             delivery = telegram_delivery.deliver_pending()
             log("Telegram: wysłano %d, ponowienia %d, trwale odrzucone %d" % (

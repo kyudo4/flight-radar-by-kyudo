@@ -2054,6 +2054,14 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("select id from public.monitors where status = 'active'", migration)
         self.assertIn("perform public.reconcile_monitor_offers(monitor_row.id)", migration)
 
+    def test_scan_reconciles_newly_saved_offers_after_source_processing(self):
+        scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
+        self.assertIn("def reconcile_active_monitor_offers(monitors, preference_cache):", scanner_source)
+        source_pass = scanner_source.index("def reconcile_active_monitor_offers(monitors, preference_cache):")
+        delivery_pass = scanner_source.index("telegram_delivery.deliver_pending()")
+        self.assertLess(source_pass, delivery_pass)
+        self.assertIn("reconcile_active_monitor_offers(\n            active, preference_cache", scanner_source)
+
     def test_telegram_auth_requires_invite_only_for_new_profiles(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
         app = (ROOT / "site" / "app.js").read_text()
