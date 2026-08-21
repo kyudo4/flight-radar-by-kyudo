@@ -32,6 +32,10 @@ on:
         required: false
         type: boolean
         default: false
+      target_monitor_name:
+        description: "Opcjonalnie przeskanuj tylko monitor o dokładnie tej nazwie"
+        required: false
+        type: string
 
 jobs:
   scan:
@@ -81,5 +85,6 @@ jobs:
           FULL_QUEUE_FIRST_LIMIT: "150"
           FORCE_SCAN: ${{ (inputs.force_scan == true || inputs.full_queue_scan == true) && 'true' || 'false' }}
           OVERRIDE_SCAN_LEASE: ${{ inputs.override_scan_lease == true && 'true' || 'false' }}
+          TARGET_MONITOR_NAME: ${{ inputs.target_monitor_name || '' }}
           RESERVED_RUN_ID: ${{ inputs.reserved_run_id || '' }}
         run: python scanner/friends_scanner.py

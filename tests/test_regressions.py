@@ -1545,7 +1545,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("suggestions.onpointerdown = chooseSuggestion", app)
         self.assertIn("event.preventDefault();", app)
         self.assertIn("Zakres dat: maksymalnie 14 dni.", app)
-        self.assertIn('app.js?v=20260810-2', html)
+        self.assertIn('app.js?v=20260821-1', html)
 
     def test_personal_radar_queries_are_explicitly_scoped_to_current_user(self):
         app = (ROOT / "site" / "app.js").read_text()
@@ -1904,7 +1904,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
 
     def test_frontend_bumps_script_cache_after_markup_change(self):
         html = (ROOT / "site" / "index.html").read_text()
-        self.assertIn('app.js?v=20260810-2', html)
+        self.assertIn('app.js?v=20260821-1', html)
         self.assertIn('styles.css?v=20260810-1', html)
 
     def test_frontend_uses_bounded_owner_scoped_history_rpc(self):
@@ -2071,6 +2071,18 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertIn("if: ${{ inputs.diagnose_only != true }}", workflow)
         self.assertIn("monitor_scan_items", diagnostics)
         self.assertIn("flight_offers(route,origin,destination", diagnostics)
+
+    def test_manila_search_prefers_mnl_and_repairs_the_affected_monitor(self):
+        app = (ROOT / "site/app.js").read_text()
+        scanner_source = (ROOT / "scanner/friends_scanner.py").read_text()
+        migration = (ROOT / "supabase/migrations/20260821000100_repair_manila_airport.sql").read_text()
+        workflow = (ROOT / ".github/workflows/scan.yml").read_text()
+        self.assertIn('MNL: "Manila", MXA: "Manila, Arkansas"', app)
+        self.assertIn('"MNL": "Manila"', scanner_source)
+        self.assertIn("when upper(value) = 'MXA' then 'MNL'", migration)
+        self.assertIn("lower(trim(monitor.name)) = 'filipiny'", migration)
+        self.assertIn("TARGET_MONITOR_NAME", scanner_source)
+        self.assertIn("target_monitor_name:", workflow)
 
     def test_telegram_auth_requires_invite_only_for_new_profiles(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()

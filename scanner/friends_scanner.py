@@ -39,6 +39,7 @@ SCAN_INTERVAL_HOURS = 6
 FORCE_SCAN = os.environ.get("FORCE_SCAN", "false").lower() == "true"
 OVERRIDE_SCAN_LEASE = os.environ.get("OVERRIDE_SCAN_LEASE", "false").lower() == "true"
 FULL_QUEUE_SCAN = os.environ.get("FULL_QUEUE_SCAN", "false").lower() == "true"
+TARGET_MONITOR_NAME = os.environ.get("TARGET_MONITOR_NAME", "").strip().casefold()
 FULL_QUEUE_STANDARD_LIMIT = max(1, min(1000, int(os.environ.get("FULL_QUEUE_STANDARD_LIMIT", "800"))))
 FULL_QUEUE_FIRST_LIMIT = max(1, min(200, int(os.environ.get("FULL_QUEUE_FIRST_LIMIT", "150"))))
 PROCESS_TELEGRAM_ONLY = os.environ.get("PROCESS_TELEGRAM_ONLY", "false").lower() == "true"
@@ -60,7 +61,8 @@ AIRPORT_NAME_OVERRIDES = {
     "ARN": "Sztokholm", "CPH": "Kopenhaga", "VIE": "Wiedeń", "BUD": "Budapeszt",
     "MXP": "Mediolan", "IST": "Stambuł", "BKK": "Bangkok", "SIN": "Singapur",
     "KUL": "Kuala Lumpur", "HKG": "Hongkong", "HAN": "Hanoi", "SGN": "Ho Chi Minh",
-    "HND": "Tokio", "NRT": "Tokio", "ICN": "Seul",
+    "HND": "Tokio", "NRT": "Tokio", "ICN": "Seul", "MNL": "Manila",
+    "MXA": "Manila, Arkansas",
 }
 
 
@@ -1459,6 +1461,12 @@ def run_reserved_scan():
     active_profiles = api("GET", "profiles", params={"status": "eq.active", "select": "id", "limit": "20"})
     active_ids = [row["id"] for row in active_profiles]
     monitors = api("GET", "monitors", params={"status": "eq.active", "user_id": "in.(%s)" % ",".join(active_ids) if active_ids else "in.(00000000-0000-0000-0000-000000000000)", "select": "*", "limit": "100"})
+    if TARGET_MONITOR_NAME:
+        monitors = [
+            monitor for monitor in monitors
+            if str(monitor.get("name") or "").strip().casefold() == TARGET_MONITOR_NAME
+        ]
+        log("Skan ograniczony do monitora: %s" % TARGET_MONITOR_NAME)
     active = []
     for monitor in monitors:
         expiry = monitor.get("expires_at") or ""
