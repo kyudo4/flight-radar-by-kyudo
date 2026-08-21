@@ -2062,6 +2062,16 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertLess(source_pass, delivery_pass)
         self.assertIn("reconcile_active_monitor_offers(\n            active, preference_cache", scanner_source)
 
+    def test_admin_can_run_bounded_monitor_diagnostics_without_google(self):
+        workflow = (ROOT / ".github/workflows/scan.yml").read_text()
+        diagnostics = (ROOT / "scanner/diagnose_state.py").read_text()
+        self.assertIn("diagnose_only:", workflow)
+        self.assertIn("if: ${{ inputs.diagnose_only == true }}", workflow)
+        self.assertIn("python scanner/diagnose_state.py", workflow)
+        self.assertIn("if: ${{ inputs.diagnose_only != true }}", workflow)
+        self.assertIn("monitor_scan_items", diagnostics)
+        self.assertIn("flight_offers(route,origin,destination", diagnostics)
+
     def test_telegram_auth_requires_invite_only_for_new_profiles(self):
         source = (ROOT / "supabase" / "functions" / "telegram-auth" / "index.ts").read_text()
         app = (ROOT / "site" / "app.js").read_text()

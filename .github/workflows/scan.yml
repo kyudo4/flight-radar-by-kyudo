@@ -27,6 +27,11 @@ on:
         required: false
         type: boolean
         default: false
+      diagnose_only:
+        description: "Pokaż diagnostykę monitorów i kolejki bez wykonywania zapytań Google"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   scan:
@@ -45,7 +50,14 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
+      - name: Inspect monitor coverage
+        if: ${{ inputs.diagnose_only == true }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python scanner/diagnose_state.py
       - name: Run shared scan
+        if: ${{ inputs.diagnose_only != true }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
