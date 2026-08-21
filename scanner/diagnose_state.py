@@ -23,7 +23,7 @@ def main():
     monitors = scanner.fetch_all_rows("monitors", {
         "status": "eq.active",
         "user_id": "in.(%s)" % ",".join(user_ids) if user_ids else "in.(00000000-0000-0000-0000-000000000000)",
-        "select": "id,name,user_id,filters,last_scan_at,next_scan_at,filters_changed_at,queue_generation",
+        "select": "id,name,user_id,filters,last_scanned_at,next_scan_at,filters_changed_at,queue_generation",
         "order": "created_at.asc,id.asc",
     })
     print("DIAGNOSTYKA aktywne_monitory=%d" % len(monitors))
@@ -53,7 +53,7 @@ def main():
                 ",".join(filters.get("cabins") or [filters.get("cabin") or ""]),
                 filters.get("budget_pln"), filters.get("max_duration_h"), filters.get("max_stops"),
                 len(items), never, due, len(matches), len(visible), len(current),
-                monitor.get("last_scan_at"), monitor.get("next_scan_at"),
+                monitor.get("last_scanned_at"), monitor.get("next_scan_at"),
                 monitor.get("filters_changed_at"), monitor.get("queue_generation"),
             )
         )
