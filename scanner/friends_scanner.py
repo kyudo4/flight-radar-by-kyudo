@@ -226,11 +226,17 @@ def valid_round_trip_pair_count(filters):
     return total
 
 
-def monitor_combinations(monitor):
+def monitor_combinations(monitor, as_of_date=None):
+    """Expand a monitor into future queue items.
+
+    ``as_of_date`` is injectable for deterministic tests. Production callers
+    leave it unset and therefore use the real current date.
+    """
     f = monitor.get("filters") or {}
     origins = sorted({x.upper() for x in f.get("origins", []) if x})
     destinations = sorted({x.upper() for x in f.get("destinations", []) if x})
-    dates = [day for day in date_range(f) if day >= date.today()]
+    effective_today = as_of_date or date.today()
+    dates = [day for day in date_range(f) if day >= effective_today]
     raw_cabins = f.get("cabins") if isinstance(f.get("cabins"), list) else [f.get("cabin") or "BUSINESS"]
     cabins = sorted({str(value).lower().replace("_", "-") for value in raw_cabins if str(value).upper() in {"BUSINESS", "FIRST", "PREMIUM_ECONOMY", "ECONOMY"}})
     if (not origins or not destinations or not dates

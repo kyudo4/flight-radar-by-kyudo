@@ -32,7 +32,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
                 "cabin": "BUSINESS",
             },
         }
-        items = scanner.monitor_combinations(monitor)
+        items = scanner.monitor_combinations(monitor, as_of_date=date(2026, 8, 1))
         self.assertEqual(len(items), 56)
         self.assertEqual(len({(x["origin"], x["destination"], x["travel_date"]) for x in items}), 56)
 
@@ -75,7 +75,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
                 "cabins": ["BUSINESS", "FIRST"],
             },
         }
-        items = scanner.monitor_combinations(monitor)
+        items = scanner.monitor_combinations(monitor, as_of_date=date(2026, 8, 1))
         self.assertEqual({item["cabin"] for item in items}, {"business", "first"})
         self.assertEqual(len(items), 2)
 
@@ -89,7 +89,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
                 "trip_type": "round_trip", "cabins": ["BUSINESS"],
             },
         }
-        items = scanner.monitor_combinations(monitor)
+        items = scanner.monitor_combinations(monitor, as_of_date=date(2026, 8, 1))
         self.assertEqual(len(items), 4)
         self.assertTrue(all(item["trip_type"] == "round_trip" for item in items))
         self.assertEqual({item["return_date"] for item in items}, {"2026-09-03", "2026-09-04"})
@@ -1346,7 +1346,9 @@ class FlightRadarRegressionTests(unittest.TestCase):
                 "from": "2026-09-01", "to": "2026-09-01", "cabin": "BUSINESS",
             },
         }
-        with patch.object(scanner, "api", return_value={"desired_count": 1, "queue_count": 1}) as api:
+        items = scanner.monitor_combinations(monitor, as_of_date=date(2026, 8, 1))
+        with patch.object(scanner, "api", return_value={"desired_count": 1, "queue_count": 1}) as api, \
+                patch.object(scanner, "monitor_combinations", return_value=items):
             scanner.sync_monitor_scan_items(monitor)
         self.assertEqual(api.call_count, 1)
         self.assertEqual(api.call_args.args[:2], ("POST", "rpc/sync_monitor_scan_items"))
