@@ -83,7 +83,9 @@ jobs:
           FULL_QUEUE_SCAN: ${{ inputs.full_queue_scan == true && 'true' || 'false' }}
           FULL_QUEUE_STANDARD_LIMIT: "1000"
           FULL_QUEUE_FIRST_LIMIT: "200"
-          FORCE_SCAN: ${{ (inputs.force_scan == true || inputs.full_queue_scan == true) && 'true' || 'false' }}
+          # A full queue pass increases the batch budget; it must not reset
+          # every queue item to "due" before selecting the next batch.
+          FORCE_SCAN: ${{ inputs.force_scan == true && 'true' || 'false' }}
           OVERRIDE_SCAN_LEASE: ${{ inputs.override_scan_lease == true && 'true' || 'false' }}
           TARGET_MONITOR_NAME: ${{ inputs.target_monitor_name || '' }}
           RESERVED_RUN_ID: ${{ inputs.reserved_run_id || '' }}
