@@ -138,6 +138,13 @@ Wyniki i ustawienia nie są zapisywane w repozytorium.
   `python scripts/generate_airports.py airports.csv site/airports.json`.
 - jeden monitoring może obejmować kilka klas jednocześnie, np. Business i First;
   każda klasa dostaje osobne zadania skanera.
+- kolejka zachowuje rotację między monitorami i klasami, ale zaczyna od pozycji
+  niesprawdzonych lub najdłużej nieodświeżanych. Zadania First są przeplatane
+  z pozostałymi klasami proporcjonalnie do ich limitów, aby krótki przebieg
+  również je obsłużył. Limit czasu nadal może wymagać kilku przebiegów;
+- log skanu pokazuje osobno liczbę zaplanowanych i faktycznie wykonanych zapytań
+  oraz bieżący postęp. Testy z ustalonymi datami korzystają ze stałej daty
+  odniesienia, żeby upływ czasu nie blokował skanera ani publikacji panelu.
 - jeden monitoring może wygenerować maksymalnie 5000 kombinacji. Panel pokazuje
   wyliczenie przed zapisem, a baza i skaner stosują ten sam limit.
 

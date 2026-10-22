@@ -43,7 +43,25 @@ class FlightRadarRegressionTests(unittest.TestCase):
             "from": "2026-10-20", "to": "2026-11-02",
             "cabins": ["ECONOMY"],
         }}
-        self.assertEqual(len(scanner.monitor_combinations(monitor)), 126)
+        items = scanner.monitor_combinations(monitor, as_of_date=date(2026, 10, 20))
+        self.assertEqual(len(items), 126)
+
+    def test_monitor_queue_shrinks_as_departure_dates_pass(self):
+        monitor = {"id": "monitor-thailand", "filters": {
+            "origins": ["WAW", "POZ", "GDN"],
+            "destinations": ["BKK", "HKT", "DMK"],
+            "from": "2026-10-20", "to": "2026-11-02",
+            "cabins": ["ECONOMY"],
+        }}
+        for today, expected in ((date(2026, 10, 20), 126),
+                                (date(2026, 10, 21), 117),
+                                (date(2026, 10, 22), 108),
+                                (date(2026, 11, 2), 9),
+                                (date(2026, 11, 3), 0)):
+            with self.subTest(today=today):
+                items = scanner.monitor_combinations(monitor, as_of_date=today)
+                self.assertEqual(len(items), expected)
+                self.assertTrue(all(item["travel_date"] >= today.isoformat() for item in items))
 
     def test_monitor_date_windows_are_limited_to_fourteen_days(self):
         scanner_source = (ROOT / "scanner" / "friends_scanner.py").read_text()
@@ -64,7 +82,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             "origins": ["POZ"], "destinations": ["BKK"],
             "from": "2026-09-01", "to": "2026-09-15", "cabin": "ECONOMY",
         }}
-        self.assertEqual(scanner.monitor_combinations(monitor), [])
+        self.assertEqual(scanner.monitor_combinations(monitor, as_of_date=date(2026, 8, 1)), [])
 
     def test_monitor_materializes_each_selected_cabin(self):
         monitor = {
@@ -661,7 +679,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             "trip_type": "round_trip", "cabins": ["BUSINESS", "FIRST", "ECONOMY", "PREMIUM_ECONOMY"],
         }}
         self.assertEqual(scanner.monitor_combination_count(monitor["filters"]), 0)
-        self.assertEqual(scanner.monitor_combinations(monitor), [])
+        self.assertEqual(scanner.monitor_combinations(monitor, as_of_date=date(2026, 8, 1)), [])
 
     def test_past_departures_are_not_materialized(self):
         past = (date.today() - timedelta(days=2)).isoformat()
@@ -704,7 +722,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
                 "cabin": "BUSINESS",
             },
         }
-        self.assertEqual(scanner.monitor_combinations(monitor), [])
+        self.assertEqual(scanner.monitor_combinations(monitor, as_of_date=date(2026, 8, 1)), [])
 
     def test_monitor_rejects_unknown_iata_code(self):
         monitor = {
@@ -716,7 +734,7 @@ class FlightRadarRegressionTests(unittest.TestCase):
             },
         }
         self.assertNotIn("ZZZ", scanner.VALID_AIRPORT_CODES)
-        self.assertEqual(scanner.monitor_combinations(monitor), [])
+        self.assertEqual(scanner.monitor_combinations(monitor, as_of_date=date(2026, 8, 1)), [])
 
     def test_paginated_history_reads_every_page(self):
         calls = []
@@ -772,6 +790,44 @@ class FlightRadarRegressionTests(unittest.TestCase):
         self.assertEqual(len(selected), 4)
         self.assertIn("economy-user", {item["monitor_id"] for item in selected})
         self.assertEqual(len(scanner.select_scan_items(due, max_standard=1, max_first=0)), 1)
+
+    def test_unscanned_queries_precede_due_refreshes(self):
+        base = {"monitor_id": "a", "origin": "WAW", "destination": "BKK", "cabin": "economy"}
+        due = [{**base, "id": "refresh", "travel_date": "2026-11-01",
+                "last_scanned_at": "2026-10-20T00:00:00Z", "next_scan_at": "2026-10-20T06:00:00Z"},
+               {**base, "id": "unscanned", "travel_date": "2026-11-02",
+                "last_scanned_at": None, "next_scan_at": "2026-10-22T06:00:00Z"}]
+        selected = scanner.select_scan_items(due, max_standard=1, max_first=0)
+        self.assertEqual([item["id"] for item in selected], ["unscanned"])
+
+    def test_short_pass_rotates_to_the_monitor_with_older_work(self):
+        due = [{"id": monitor_id, "monitor_id": monitor_id, "origin": "WAW", "destination": dest,
+                "travel_date": "2026-11-01", "cabin": "economy", "last_scanned_at": scanned}
+               for monitor_id, dest, scanned in (
+                   ("a", "BKK", "2026-10-22T00:00:00Z"),
+                   ("z", "HKT", "2026-10-21T00:00:00Z"))]
+        self.assertEqual(scanner.select_scan_items(due, max_standard=1, max_first=0)[0]["id"], "z")
+        due[1]["last_scanned_at"] = "2026-10-22T01:00:00Z"
+        self.assertEqual(scanner.select_scan_items(due, max_standard=1, max_first=0)[0]["id"], "a")
+
+    def test_first_tasks_are_spread_through_a_bounded_scan(self):
+        standard = [{"id": f"standard-{index}"} for index in range(8)]
+        first = [{"id": f"first-{index}"} for index in range(2)]
+        tasks = scanner.interleave_scan_tasks(standard, first)
+        self.assertEqual([task["id"] for task in tasks[:2]], ["standard-0", "first-0"])
+        self.assertEqual(len(tasks), 10)
+        self.assertEqual([task for task in tasks if task in first], first)
+        self.assertEqual([task for task in tasks if task in standard], standard)
+        self.assertEqual(scanner.interleave_scan_tasks([], first), first)
+        self.assertEqual(scanner.interleave_scan_tasks(standard, []), standard)
+        self.assertEqual(scanner.interleave_scan_tasks([], []), [])
+
+    def test_prioritized_shared_query_keeps_every_matching_monitor(self):
+        base = {"origin": "WAW", "destination": "BKK", "travel_date": "2026-11-01", "cabin": "economy"}
+        due = [{**base, "id": "refresh", "monitor_id": "a", "last_scanned_at": "2026-10-20T00:00:00Z"},
+               {**base, "id": "new", "monitor_id": "z", "last_scanned_at": None}]
+        selected = scanner.select_scan_items(due, max_standard=1, max_first=0)
+        self.assertEqual({item["id"] for item in selected}, {"refresh", "new"})
 
     def test_historical_duplicate_uses_durable_low_not_current_offer(self):
         previous = [{

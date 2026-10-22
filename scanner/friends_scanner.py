@@ -98,7 +98,7 @@ def route_label(value):
 
 
 def log(text):
-    print("[%s] %s" % (datetime.utcnow().isoformat(timespec="seconds"), text))
+    print("[%s] %s" % (datetime.utcnow().isoformat(timespec="seconds"), text), flush=True)
 
 
 def update_scan_progress(run_id, query_count, offer_count):
@@ -564,6 +564,14 @@ def task_error(task, error):
     return "%s [%s]: %s" % (task_label(task), type(error).__name__, str(error)[:180])
 
 
+def _queue_item_priority(item):
+    """Finish unscanned work before refreshing already completed queries."""
+    return (item.get("last_scanned_at") or "",
+            item.get("next_scan_at") or "",
+            item.get("created_at") or "",
+            item.get("id") or "")
+
+
 def _select_fair_bucket(items, max_count, allowed_cabins):
     """Wybiera unikalne zapytania rotacyjnie po klasie i monitorze.
 
@@ -584,9 +592,21 @@ def _select_fair_bucket(items, max_count, allowed_cabins):
         by_cabin_monitor[cabin][item["monitor_id"]].append((key, item))
         by_key[key].append(item)
 
+    for groups in by_cabin_monitor.values():
+        for entries in groups.values():
+            entries.sort(key=lambda entry: _queue_item_priority(entry[1]))
+
     cabin_priority = {"business": 0, "economy": 1, "premium-economy": 2, "first": 3}
     cabins = sorted(by_cabin_monitor, key=lambda cabin: (cabin_priority.get(cabin, 99), cabin))
-    monitor_ids = {cabin: sorted(by_cabin_monitor[cabin]) for cabin in cabins}
+    # A short timed-out pass must not start at the same monitor on every run.
+    # Successful items move to the back, while untouched items retain priority.
+    monitor_ids = {cabin: sorted(
+        by_cabin_monitor[cabin],
+        key=lambda monitor_id: (
+            _queue_item_priority(by_cabin_monitor[cabin][monitor_id][0][1]),
+            monitor_id,
+        ),
+    ) for cabin in cabins}
     monitor_cursor = {cabin: 0 for cabin in cabins}
     positions = {cabin: {monitor_id: 0 for monitor_id in monitor_ids[cabin]} for cabin in cabins}
     selected_keys = []
@@ -629,6 +649,14 @@ def select_scan_items(due_items, max_standard=MAX_STANDARD, max_first=MAX_FIRST)
     standard = _select_fair_bucket(due_items, max_standard, {"business", "economy", "premium-economy"})
     first = _select_fair_bucket(due_items, max_first, {"first"})
     return standard + first
+
+
+def interleave_scan_tasks(standard_tasks, first_tasks):
+    """Spread both budgets through the run so a timeout cannot starve First."""
+    ranked = [(index / len(bucket), bucket_index, task)
+              for bucket_index, bucket in enumerate((standard_tasks, first_tasks))
+              for index, task in enumerate(bucket)]
+    return [task for _, _, task in sorted(ranked, key=lambda row: row[:2])]
 
 
 def task_key(task):
@@ -1510,8 +1538,8 @@ def run_reserved_scan():
     selected_tasks = tasks_from_items(due_items)
     first_tasks = [task for task in selected_tasks if task["cabin"] == "first"][:limits["first"]]
     standard_tasks = [task for task in selected_tasks if task["cabin"] != "first"][:limits["standard"]]
-    tasks = standard_tasks + first_tasks
-    log("Aktywne monitory: %d, zaległe kombinacje: %d, wybrane elementy: %d, zapytania w tym przebiegu: %d, limity: %d + %d First" % (len(active), len(all_due_items), len(due_items), len(tasks), limits["standard"], limits["first"]))
+    tasks = interleave_scan_tasks(standard_tasks, first_tasks)
+    log("Aktywne monitory: %d, zaległe kombinacje: %d, wybrane elementy: %d, zaplanowane zapytania: %d, limity: %d + %d First" % (len(active), len(all_due_items), len(due_items), len(tasks), limits["standard"], limits["first"]))
     run = None
     if RESERVED_RUN_ID:
         reserved = api("GET", "scan_runs", params={"id": "eq." + RESERVED_RUN_ID, "select": "*"})
@@ -1645,6 +1673,8 @@ def run_reserved_scan():
                 api("PATCH", "monitor_scan_items", body={"last_scanned_at": now.isoformat() + "Z", "next_scan_at": (now + timedelta(hours=SCAN_INTERVAL_HOURS)).isoformat() + "Z"}, params={"id": "in.(%s)" % ",".join(task["item_ids"])})
             if executed_count % PROGRESS_UPDATE_EVERY == 0:
                 update_scan_progress(run["id"], executed_count, offers_count)
+                log("Postęp skanu: wykonano %d/%d zaplanowanych zapytań, udane: %d, błędy źródła: %d, oferty: %d" % (
+                    executed_count, len(tasks), successful_google_tasks, failed_google_tasks, offers_count))
         # RSS nie zużywa limitu zapytań Google, ale przechodzi ten sam filtr
         # dat, klasy, trasy i osobnych reguł Telegrama.
         rss_active = [m for m in active if trip_type(m.get("filters") or {}) == "one_way"]
@@ -1726,6 +1756,8 @@ def run_reserved_scan():
             "blocked": blocked,
             "error": " | ".join(task_errors)[:500] or None,
         }, params={"id": "eq." + run["id"]})
+        log("Wykonane zapytania: %d/%d zaplanowanych, udane: %d, błędy źródła: %d, pozostałe: %d, pokrycie: %.2f%%" % (
+            executed_count, selected_count, successful_google_tasks, failed_google_tasks, deferred_count, coverage_percent))
         log("Oferty: %d, alerty Telegram dodane do kolejki: %d" % (offers_count, sent_count))
         if blocked:
             raise ScanBlockedRun("Google zablokował skan; kolejny przebieg pozostaje na bezpiecznym limicie")
